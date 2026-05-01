@@ -43,8 +43,22 @@ let cachedToken:
       expiresAt: number;
     }
   | undefined;
+let refreshInFlight: Promise<string> | undefined;
+
+const ZOHO_ACCESS_TOKEN_CACHE_KEY = "zoho:workdrive:access_token";
+const TOKEN_REFRESH_SKEW_MS = 60_000;
+
+type CachedZohoToken = {
+  accessToken: string;
+  expiresAt: number;
+};
 
 const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
+
+export function resetZohoAccessTokenCacheForTests() {
+  cachedToken = undefined;
+  refreshInFlight = undefined;
+}
 
 export class ZohoWorkDriveClient {
   constructor(
@@ -270,14 +284,8 @@ export class ZohoWorkDriveClient {
       return config.zoho.accessToken;
     }
 
-    if (
-      cachedToken &&
-      cachedToken.expiresAt > Date.now() + 60_000 &&
-      config.zoho.clientId &&
-      config.zoho.clientSecret &&
-      config.zoho.refreshToken
-    ) {
-      return cachedToken.accessToken;
+    if (isUsableToken(cachedToken)) {
+      return cachedToken!.accessToken;
     }
 
     if (
@@ -290,11 +298,55 @@ export class ZohoWorkDriveClient {
       );
     }
 
+    const kvToken = await this.readCachedAccessToken();
+    if (isUsableToken(kvToken)) {
+      cachedToken = kvToken;
+      return kvToken!.accessToken;
+    }
+
+    if (refreshInFlight) {
+      return refreshInFlight;
+    }
+
+    refreshInFlight = this.refreshAccessToken().finally(() => {
+      refreshInFlight = undefined;
+    });
+    return refreshInFlight;
+  }
+
+  private async readCachedAccessToken() {
+    if (!this.env.OAUTH_KV) {
+      return undefined;
+    }
+    try {
+      return (
+        (await this.env.OAUTH_KV.get<CachedZohoToken>(
+          ZOHO_ACCESS_TOKEN_CACHE_KEY,
+          "json",
+        )) ?? undefined
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeCachedAccessToken(token: CachedZohoToken) {
+    if (!this.env.OAUTH_KV) {
+      return;
+    }
+    const expirationTtl = Math.max(60, Math.floor((token.expiresAt - Date.now()) / 1000));
+    await this.env.OAUTH_KV.put(ZOHO_ACCESS_TOKEN_CACHE_KEY, JSON.stringify(token), {
+      expirationTtl,
+    });
+  }
+
+  private async refreshAccessToken() {
+    const config = loadConfig(this.env);
     const tokenUrl = new URL("/oauth/v2/token", config.zoho.accountsBaseUrl);
     const body = new URLSearchParams({
-      client_id: config.zoho.clientId,
-      client_secret: config.zoho.clientSecret,
-      refresh_token: config.zoho.refreshToken,
+      client_id: config.zoho.clientId!,
+      client_secret: config.zoho.clientSecret!,
+      refresh_token: config.zoho.refreshToken!,
       grant_type: "refresh_token",
     });
 
@@ -308,6 +360,9 @@ export class ZohoWorkDriveClient {
 
     if (!response.ok) {
       const text = await response.text();
+      if (cachedToken && cachedToken.expiresAt > Date.now()) {
+        return cachedToken.accessToken;
+      }
       throw new Error(`Failed to refresh Zoho access token: ${response.status} ${text}`);
     }
 
@@ -315,12 +370,18 @@ export class ZohoWorkDriveClient {
       access_token: string;
       expires_in?: number;
     };
+    const expiresIn = payload.expires_in ?? 3600;
     cachedToken = {
       accessToken: payload.access_token,
-      expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000,
+      expiresAt: Date.now() + expiresIn * 1000,
     };
+    await this.writeCachedAccessToken(cachedToken);
     return cachedToken.accessToken;
   }
+}
+
+function isUsableToken(token: CachedZohoToken | undefined) {
+  return Boolean(token && token.expiresAt > Date.now() + TOKEN_REFRESH_SKEW_MS);
 }
 
 function normalizeZohoItem(item: ZohoItem): ZohoFile {

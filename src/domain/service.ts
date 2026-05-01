@@ -25,7 +25,7 @@ import {
 import { rerankSearchHits } from "~/domain/ranking";
 import { isVisibleInProjectScope } from "~/domain/scope";
 import { GithubOAuthClient } from "~/integrations/github/client";
-import { embedText, embedTexts } from "~/integrations/workers-ai/embeddings";
+import { embedTexts } from "~/integrations/workers-ai/embeddings";
 import { queryMemoryIndex, replaceDocumentVectors, deleteVectors } from "~/integrations/vectorize/client";
 import { ZohoWorkDriveClient, type ZohoFile } from "~/integrations/zoho/client";
 import { MemoryRepository } from "~/persistence/d1/repository";
@@ -579,6 +579,15 @@ export class MemoryService {
         vector_error: projectResults.find((result) => result.diagnostics?.vector_error)?.diagnostics
           ?.vector_error ?? null,
         namespaces: [...new Set(projectResults.flatMap((result) => result.diagnostics?.namespaces ?? []))],
+        query_variants: mergeQueryVariantDiagnostics(
+          projectResults.flatMap((result) => result.diagnostics?.query_variants ?? []),
+        ),
+        keyword_fallback_used: projectResults.some(
+          (result) => result.diagnostics?.keyword_fallback_used,
+        ),
+        keyword_fallback_due_to_empty_semantic: projectResults.some(
+          (result) => result.diagnostics?.keyword_fallback_due_to_empty_semantic,
+        ),
         scope,
         searched_projects: relatedProjects,
       },
@@ -606,26 +615,47 @@ export class MemoryService {
     let hits: MemorySearchHit[] = [];
     let ranked: MemorySearchHit[] = [];
     let vectorError: string | null = null;
+    const queryVariants = uniqueQueryVariants(input.query);
+    let queryVariantDiagnostics: Array<{ label: string; query: string; vector_hits: number }> =
+      queryVariants.map((variant) => ({ ...variant, vector_hits: 0 }));
     try {
       const vectorResult = await withTimeout(
         (async () => {
-          const embedding = await embedText(this.env, input.query);
-          const vectorHits = await queryMemoryIndex(
+          const embeddings = await embedTexts(
             this.env,
-            embedding,
-            namespaces,
-            {
-              project: normalizedProject,
-              includeSuperseded: input.includeSuperseded,
-              memoryTypes: input.memoryTypes,
-              statuses: input.statuses,
-              activeOnly: input.activeOnly,
-              repo: input.repo,
-              path: input.path,
-              source: input.source,
-              tags: input.tags,
-              limit: input.limit,
-            },
+            queryVariants.map((variant) => variant.query),
+          );
+          const variantResults = await Promise.all(
+            queryVariants.map(async (variant, index) => {
+              const variantHits = await queryMemoryIndex(
+                this.env,
+                embeddings[index],
+                namespaces,
+                {
+                  project: normalizedProject,
+                  includeSuperseded: input.includeSuperseded,
+                  memoryTypes: input.memoryTypes,
+                  statuses: input.statuses,
+                  activeOnly: input.activeOnly,
+                  repo: input.repo,
+                  path: input.path,
+                  source: input.source,
+                  tags: input.tags,
+                  limit: input.limit,
+                  candidateLimit: semanticCandidateLimit(input.limit),
+                },
+              );
+              return { ...variant, hits: variantHits };
+            }),
+          );
+          queryVariantDiagnostics = variantResults.map((variant) => ({
+            label: variant.label,
+            query: variant.query,
+            vector_hits: variant.hits.length,
+          }));
+          const rawVectorHits = variantResults.flatMap((variant) => variant.hits);
+          const vectorHits = dedupeSearchHitsByBestScore(
+            rawVectorHits,
           );
 
           const chunkTextByVectorId = await this.repo.getChunkContentsByVectorIds(
@@ -660,7 +690,7 @@ export class MemoryService {
             .filter((hit) => isVisibleInProjectScope(hit, normalizedProject));
 
           return {
-            hits: vectorHits,
+            hits: rawVectorHits,
             ranked: rerankSearchHits(hydratedHits, {
               includeSuperseded: input.includeSuperseded,
               project: normalizedProject,
@@ -741,6 +771,9 @@ export class MemoryService {
         keyword_hits: keywordMatches.length,
         vector_error: vectorError,
         namespaces,
+        query_variants: queryVariantDiagnostics,
+        keyword_fallback_used: keywordResults.length > 0,
+        keyword_fallback_due_to_empty_semantic: hits.length === 0 && keywordResults.length > 0,
       },
     };
   }
@@ -2718,6 +2751,63 @@ function buildQueryVariants(query: string) {
     projects: `projects repositories workstreams context ${query}`,
     recent_activity: `recent decisions tasks source events session summaries ${query}`,
   };
+}
+
+function uniqueQueryVariants(query: string) {
+  const variants = buildQueryVariants(query);
+  const seen = new Set<string>();
+  return Object.entries(variants)
+    .map(([label, variantQuery]) => ({
+      label,
+      query: variantQuery.trim(),
+    }))
+    .filter((variant) => {
+      const key = variant.query.toLowerCase();
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function semanticCandidateLimit(limit?: number) {
+  return Math.max(12, Math.min((limit ?? 8) * 3, 50));
+}
+
+function dedupeSearchHitsByBestScore(hits: MemorySearchHit[]) {
+  const byVectorId = new Map<string, MemorySearchHit>();
+  for (const hit of hits) {
+    const existing = byVectorId.get(hit.vectorId);
+    if (!existing || hit.score > existing.score) {
+      byVectorId.set(hit.vectorId, hit);
+    }
+  }
+
+  const byDocumentHeading = new Map<string, MemorySearchHit>();
+  for (const hit of byVectorId.values()) {
+    const key = `${hit.documentId}:${hit.headingPath}`;
+    const existing = byDocumentHeading.get(key);
+    if (!existing || hit.score > existing.score) {
+      byDocumentHeading.set(key, hit);
+    }
+  }
+  return [...byDocumentHeading.values()];
+}
+
+function mergeQueryVariantDiagnostics(
+  variants: Array<{ label: string; query: string; vector_hits: number }>,
+) {
+  const merged = new Map<string, { label: string; query: string; vector_hits: number }>();
+  for (const variant of variants) {
+    const existing = merged.get(variant.label);
+    if (existing) {
+      existing.vector_hits += variant.vector_hits;
+    } else {
+      merged.set(variant.label, { ...variant });
+    }
+  }
+  return [...merged.values()];
 }
 
 function classifyRetrievalMode(result: unknown) {

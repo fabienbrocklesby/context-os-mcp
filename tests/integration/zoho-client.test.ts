@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ZohoWorkDriveClient } from "~/integrations/zoho/client";
+import { resetZohoAccessTokenCacheForTests, ZohoWorkDriveClient } from "~/integrations/zoho/client";
 
 const baseEnv = {
   APP_BASE_URL: "https://memory.example.com",
@@ -19,6 +19,10 @@ const baseEnv = {
 } as unknown as Env;
 
 describe("ZohoWorkDriveClient", () => {
+  beforeEach(() => {
+    resetZohoAccessTokenCacheForTests();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -189,6 +193,99 @@ describe("ZohoWorkDriveClient", () => {
       expect.objectContaining({
         method: "POST",
       }),
+    );
+  });
+
+  it("reuses a KV-cached Zoho access token instead of refreshing on cold starts", async () => {
+    const get = vi.fn(async () => ({
+      accessToken: "kv-access",
+      expiresAt: Date.now() + 3_600_000,
+    }));
+    const put = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: {
+            id: "file-1",
+            type: "files",
+            attributes: {
+              name: "vision.md",
+              parent_id: "folder-1",
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    const client = new ZohoWorkDriveClient(
+      {
+        ...baseEnv,
+        OAUTH_KV: { get, put } as unknown as KVNamespace,
+      } as Env,
+      fetchImpl,
+    );
+    await client.getFile("file-1");
+
+    expect(get).toHaveBeenCalledWith("zoho:workdrive:access_token", "json");
+    expect(put).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://workdrive.zoho.com/api/v1/files/file-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Zoho-oauthtoken kv-access",
+        }),
+      }),
+    );
+  });
+
+  it("stores refreshed Zoho access tokens in KV for other Worker isolates", async () => {
+    const get = vi.fn(async () => null);
+    const put = vi.fn();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "fresh-access", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              id: "file-1",
+              type: "files",
+              attributes: {
+                name: "vision.md",
+                parent_id: "folder-1",
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+    const client = new ZohoWorkDriveClient(
+      {
+        ...baseEnv,
+        OAUTH_KV: { get, put } as unknown as KVNamespace,
+      } as Env,
+      fetchImpl,
+    );
+    await client.getFile("file-1");
+
+    expect(put).toHaveBeenCalledWith(
+      "zoho:workdrive:access_token",
+      expect.stringContaining("fresh-access"),
+      expect.objectContaining({ expirationTtl: expect.any(Number) }),
     );
   });
 });

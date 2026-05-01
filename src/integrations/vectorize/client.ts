@@ -28,9 +28,9 @@ export async function queryMemoryIndex(
   env: Env,
   vector: number[],
   namespaces: string[],
-  filters: MemorySearchFilters & { limit?: number },
+  filters: MemorySearchFilters & { limit?: number; candidateLimit?: number },
 ) {
-  const topK = Math.min(filters.limit ?? 8, 20);
+  const topK = Math.min(filters.candidateLimit ?? filters.limit ?? 8, 50);
   const matches = await Promise.all(
     namespaces.map((namespace) =>
       env.MEMORY_INDEX.query(vector, {
