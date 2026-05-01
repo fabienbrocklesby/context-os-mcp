@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.npm-cache/
+
+# Build/test output
+dist/
+coverage/
+.nyc_output/
+
+# Cloudflare local/generated state
+.wrangler/
+.wrangler-*/
+wrangler.jsonc
+src/worker-configuration.d.ts
+
+# Local secrets and environment
+.dev.vars
+.env
+.env.*
+!.env.example
+
+# Local production backups and exports
+backups/
+*.sqlite
+*.sqlite3
+*.db
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+AGENTS.md
+docs/CLIENT_INSTRUCTIONS.md
+docs/instructions/

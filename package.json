@@ -1,0 +1,30 @@
+{
+  "name": "context-os-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote MCP context OS for AI assistants: durable memory, initiatives, entities, facts, tasks, source events, and session planning.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface Env src/worker-configuration.d.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.4.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "agents": "0.11.5",
+    "yaml": "^2.8.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.9",
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "@types/node": "^24.9.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "wrangler": "4.84.1"
+  }
+}
