@@ -69,6 +69,11 @@ vi.mock("~/domain/service", () => {
         write_back_policy: {
           mode: "selective_durable_facts",
         },
+        strategy_context: {
+          project: "memory-system-mcp",
+          visions: [],
+          warnings: ["no_active_vision"],
+        },
         operational_context: {
           timezone: "Pacific/Auckland",
           weekday: "Saturday",
@@ -82,6 +87,43 @@ vi.mock("~/domain/service", () => {
         },
         tool_plan: {
           required_tools: [],
+        },
+        operating_brief: {
+          context_resolution: {
+            project_switching: {
+              selected: "memory-system-mcp",
+            },
+          },
+          time_actionability: {
+            weekday: "Saturday",
+            actionability_label: "prep_or_async_only",
+          },
+          strategic_alignment: {
+            project: "memory-system-mcp",
+            assessment: null,
+          },
+          relevant_assets: [],
+          current_tasks_milestones: {
+            open_tasks: [],
+            milestones: [],
+          },
+          source_freshness: {
+            retrieval_mode: "no_hits",
+            warnings: [],
+          },
+          required_live_checks: [],
+          risks: [],
+          recommended_next_actions: {
+            before_answer: [],
+            before_action: [],
+            safe_now: ["Do prep, admin, drafting, review, or asynchronous work."],
+            defer_until: null,
+            needs_user_confirmation: [],
+          },
+          write_back_plan: {
+            recommendations: [{ tool: "finish_work_session" }],
+            forbidden_content: ["secrets or credentials"],
+          },
         },
       };
     }
@@ -171,6 +213,78 @@ vi.mock("~/domain/service", () => {
 
     async upsertInitiative() {
       return { initiative: { slug: "assistant-context-os" }, projects: [] };
+    }
+
+    async upsertVision() {
+      return { strategy_node: { slug: "improve-assistant-context", type: "vision" } };
+    }
+
+    async listVisions() {
+      return { strategy_nodes: [] };
+    }
+
+    async getStrategyContext() {
+      return {
+        strategy_context: {
+          project: "memory-system-mcp",
+          visions: [],
+          pillars: [],
+          outcomes: [],
+          initiatives: [],
+          milestones: [],
+          assets: [],
+          branch_project: null,
+          warnings: ["no_active_vision"],
+        },
+      };
+    }
+
+    async upsertAsset() {
+      return { asset: { id: "asset-1", slug: "repo-guide" } };
+    }
+
+    async listAssets() {
+      return { assets: [] };
+    }
+
+    async linkAsset() {
+      return { links: [] };
+    }
+
+    async upsertMilestone() {
+      return { milestone: { id: "milestone-1", slug: "prototype-ready" } };
+    }
+
+    async createBranchProject() {
+      return { branch_project: { projectSlug: "research-branch" } };
+    }
+
+    async checkAlignment() {
+      return {
+        alignment_assessment: {
+          alignmentLabel: "unknown_until_more_context",
+          score: 0,
+          confidence: "low",
+        },
+      };
+    }
+
+    async planRequest() {
+      return {
+        strategy_context: { project: "memory-system-mcp", warnings: ["no_active_vision"] },
+        alignment_assessment: { alignmentLabel: "unknown_until_more_context" },
+        operating_brief: {
+          required_live_checks: [],
+          write_back_plan: {
+            recommendations: [{ tool: "finish_work_session" }],
+          },
+        },
+        request_plan: {
+          objective: "Improve assistant planning.",
+          tool_sequence: [],
+        },
+        recommended_next_steps: [],
+      };
     }
 
     async linkMemory() {
@@ -286,6 +400,16 @@ describe("MCP contract", () => {
         "list_initiatives",
         "get_initiative_context",
         "upsert_initiative",
+        "upsert_vision",
+        "list_visions",
+        "get_strategy_context",
+        "upsert_asset",
+        "list_assets",
+        "link_asset",
+        "upsert_milestone",
+        "create_branch_project",
+        "check_alignment",
+        "plan_request",
         "link_memory",
         "save_source_event",
         "extract_durable_facts",
@@ -335,6 +459,16 @@ describe("MCP contract", () => {
       write_back_policy: {
         mode: "selective_durable_facts",
       },
+      operating_brief: {
+        time_actionability: {
+          actionability_label: "prep_or_async_only",
+        },
+        write_back_plan: {
+          recommendations: expect.arrayContaining([
+            expect.objectContaining({ tool: "finish_work_session" }),
+          ]),
+        },
+      },
     });
     expect(payload.recommended_live_mcp_checks[0]).toContain("github");
   });
@@ -373,6 +507,54 @@ describe("MCP contract", () => {
         label: "prep_or_async_only",
       },
     });
+  });
+
+  it("registers Phase 2 strategic world model tools", async () => {
+    const client = await connectTestClient(env, principal);
+
+    const strategyResponse = await client.callTool({
+      name: "get_strategy_context",
+      arguments: {
+        project_or_topic: "memory-system-mcp",
+        user_intent: "Improve assistant planning.",
+      },
+    });
+    const strategyPayload = JSON.parse(readFirstTextContent(strategyResponse));
+    expect(strategyPayload.strategy_context).toMatchObject({
+      project: "memory-system-mcp",
+      warnings: ["no_active_vision"],
+    });
+
+    const alignmentResponse = await client.callTool({
+      name: "check_alignment",
+      arguments: {
+        project_or_topic: "memory-system-mcp",
+        user_intent: "Explore a new idea.",
+      },
+    });
+    const alignmentPayload = JSON.parse(readFirstTextContent(alignmentResponse));
+    expect(alignmentPayload.alignment_assessment).toMatchObject({
+      alignmentLabel: "unknown_until_more_context",
+      score: 0,
+    });
+
+    const invalidBranchResponse = await client.callTool({
+      name: "create_branch_project",
+      arguments: {
+        project: "research-branch",
+        parent_initiative_id: "initiative-1",
+        branch_reason: "Explore a small experiment",
+        hypothesis: "A prototype will clarify value",
+        timebox_starts_at: "2026-05-01",
+        timebox_ends_at: "2026-05-15",
+        success_metric: "Prototype reviewed",
+        risk_to_parent: "May consume focus",
+        risk_level: "medium",
+        merge_back_condition: "Prototype proves useful",
+      },
+    });
+    expect(invalidBranchResponse.isError).toBe(true);
+    expect(readFirstTextContent(invalidBranchResponse)).toContain("kill_condition");
   });
 
   it("returns OpenAI-compatible search and fetch payload shapes", async () => {

@@ -260,6 +260,16 @@ Tables added by `migrations/0003_assistant_context_os.sql`:
 
 The third migration is additive. It preserves existing WorkDrive documents, document metadata, chunks, projects, GitHub metadata, and Vectorize data while enabling the Context OS relationship layer.
 
+Tables added by `migrations/0004_strategic_world_model.sql`:
+
+- `strategy_nodes`
+- `assets`
+- `milestones`
+- `branch_projects`
+- `alignment_assessments`
+
+The fourth migration is additive. It adds the strategic world model for visions, pillars, outcomes, assets, milestones, branch-project protocol, and saved alignment assessments without changing existing document or Phase 1 reliability tables.
+
 ## MCP Tool Surface
 
 ### OpenAI-compatible tools
@@ -280,6 +290,16 @@ These exist specifically so OpenAI deep research and connector-style clients can
 - `list_initiatives`
 - `get_initiative_context`
 - `upsert_initiative`
+- `upsert_vision`
+- `list_visions`
+- `get_strategy_context`
+- `upsert_asset`
+- `list_assets`
+- `link_asset`
+- `upsert_milestone`
+- `create_branch_project`
+- `check_alignment`
+- `plan_request`
 - `upsert_task`
 - `save_source_event`
 - `extract_durable_facts`
@@ -592,9 +612,12 @@ After deployment:
 4. call `ensure_project` for one non-shared project
 5. call `bootstrap_project_context`
 6. call `github_associate_repo` and `github_index_repo_overview`
-7. call `prepare_assistant_session` and verify active project, initiative context, grouped memory, context health, live MCP recommendations, and write-back policy
-8. call `context_health_check` and `retrieval_diagnostics` for a broad query
-9. run a staging write and reindex flow before pointing real AI clients at production
+7. call `prepare_assistant_session` and verify active project, initiative context, grouped memory, context health, `operating_brief.required_live_checks`, and `operating_brief.write_back_plan`
+8. call `plan_request` for a repo-planning request and verify `request_plan.tool_sequence` requires GitHub checks before repo claims
+9. call `plan_request` for a dated scheduling request and verify validated date/weekday/timezone plus a calendar availability check
+10. call `plan_request` with a deliberately incomplete `available_tools` list and verify unavailable required tools are marked `blocking: true`
+11. call `context_health_check` and `retrieval_diagnostics` for a broad query
+12. run a staging write and reindex flow before pointing real AI clients at production
 
 ## Connect From Claude
 
@@ -660,6 +683,7 @@ Current automated coverage:
 - Zoho client token refresh and download behavior
 - MCP tool registration and OpenAI-compatible `search` / `fetch` result shapes using the official MCP SDK in-memory transport
 - indexing orchestration across chunking, embeddings, Vectorize upsert, and repository persistence boundaries using mocked integrations
+- Assistant Context OS operating brief behavior, including unavailable GitHub/calendar tool warnings and closeout write-back recommendations
 
 Run:
 
@@ -685,8 +709,9 @@ Because this repository does not include live Cloudflare account state or Zoho t
    - a new snapshot is written
    - retrieval prefers the latest active context
 10. Test `upsert_initiative`, `upsert_task`, `save_source_event`, `extract_durable_facts`, and `link_memory` against staging data.
-11. Test an external manual edit in WorkDrive and wait for the cron reconciliation path to enqueue and reindex it.
-12. Connect one real client each from Claude, ChatGPT developer mode, and Codex.
+11. Test `finish_work_session` and confirm the session summary is written and reindexed.
+12. Test an external manual edit in WorkDrive and wait for the cron reconciliation path to enqueue and reindex it.
+13. Connect one real client each from Claude, ChatGPT developer mode, and Codex.
 
 ## Known Limitations
 
@@ -694,6 +719,7 @@ Because this repository does not include live Cloudflare account state or Zoho t
 - Broad semantic queries may still fall back to keyword-only retrieval if Vectorize returns no semantic hits. `context_health_check` and `retrieval_diagnostics` expose this instead of hiding it.
 - Zoho write-path verification still depends on tenant-specific validation of the upload endpoint. The code is explicit about this and will not pretend otherwise.
 - The local automated suite uses mocked integration boundaries for Zoho, Vectorize, Workers AI, and D1-adjacent orchestration. It does not prove live provider interoperability by itself.
+- Local tests prove the computed operating brief shape, but they do not prove that every downstream AI client will actually follow the brief. Client onboarding must still be checked manually.
 - Anthropic remote MCP currently supports tools only, not full MCP resources/prompts.
 - ChatGPT deep-research compatibility depends primarily on the `search` and `fetch` tool contract; richer write tools are intended for developer mode and compatible MCP clients.
 - Cron Triggers run in UTC. If you need region-specific reconciliation windows, plan around UTC or deploy environment-specific schedules.
@@ -720,5 +746,6 @@ Not yet verified in this repo alone:
 
 - end-user OAuth sign-in in a deployed environment
 - production client onboarding from Claude, ChatGPT, and Codex
+- live end-to-end enforcement that each client follows `operating_brief.required_live_checks`
 
 That separation is intentional so the documentation stays accurate.

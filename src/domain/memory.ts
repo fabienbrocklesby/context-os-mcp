@@ -224,12 +224,97 @@ export const sourceSavePolicySchema = z.enum([
   "requires_approval",
 ]);
 
+export const strategyNodeTypeSchema = z.enum([
+  "vision",
+  "north_star",
+  "strategic_pillar",
+  "outcome",
+]);
+
+export const assetTypeSchema = z.enum([
+  "document",
+  "repo",
+  "dataset",
+  "system",
+  "credential_reference",
+  "process",
+  "contact_group",
+  "budget",
+  "tool",
+  "other",
+]);
+
+export const assetStatusSchema = z.enum([
+  "active",
+  "planned",
+  "deprecated",
+  "unavailable",
+  "archived",
+]);
+
+export const liveSourceKindSchema = z.enum([
+  "github",
+  "workdrive",
+  "zoho_crm",
+  "zoho_mail",
+  "calendar",
+  "shopify",
+  "manual",
+  "other",
+]);
+
+export const milestoneStatusSchema = z.enum([
+  "planned",
+  "active",
+  "blocked",
+  "completed",
+  "missed",
+  "cancelled",
+  "archived",
+]);
+
+export const branchRiskLevelSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "critical",
+]);
+
+export const branchProjectStatusSchema = z.enum([
+  "proposed",
+  "active",
+  "merge_back",
+  "killed",
+  "completed",
+  "archived",
+]);
+
+export const alignmentLabelSchema = z.enum([
+  "directly_advances",
+  "indirectly_supports",
+  "neutral_experiment",
+  "distraction_risk",
+  "conflicts",
+  "unknown_until_more_context",
+]);
+
+export const alignmentConfidenceSchema = z.enum(["low", "medium", "high"]);
+
 export type InitiativeStatus = z.infer<typeof initiativeStatusSchema>;
 export type EntityType = z.infer<typeof entityTypeSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type SourceSensitivity = z.infer<typeof sourceSensitivitySchema>;
 export type SourceSavePolicy = z.infer<typeof sourceSavePolicySchema>;
+export type StrategyNodeType = z.infer<typeof strategyNodeTypeSchema>;
+export type AssetType = z.infer<typeof assetTypeSchema>;
+export type AssetStatus = z.infer<typeof assetStatusSchema>;
+export type LiveSourceKind = z.infer<typeof liveSourceKindSchema>;
+export type MilestoneStatus = z.infer<typeof milestoneStatusSchema>;
+export type BranchRiskLevel = z.infer<typeof branchRiskLevelSchema>;
+export type BranchProjectStatus = z.infer<typeof branchProjectStatusSchema>;
+export type AlignmentLabel = z.infer<typeof alignmentLabelSchema>;
+export type AlignmentConfidence = z.infer<typeof alignmentConfidenceSchema>;
 
 export type MemoryInitiative = {
   id: string;
@@ -337,6 +422,113 @@ export type MemoryLink = {
   relation: string;
   weight: number;
   metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type StrategyNode = {
+  id: string;
+  project: string;
+  slug: string;
+  type: StrategyNodeType;
+  title: string;
+  summary: string | null;
+  status: InitiativeStatus;
+  parentId: string | null;
+  horizon: string | null;
+  priority: TaskPriority;
+  metricName: string | null;
+  targetValue: string | null;
+  currentValue: string | null;
+  metricUnit: string | null;
+  metricDirection: "increase" | "decrease" | "maintain" | "binary" | "qualitative" | null;
+  startsAt: string | null;
+  dueAt: string | null;
+  reviewCadence: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StrategyAsset = {
+  id: string;
+  project: string;
+  slug: string;
+  name: string;
+  type: AssetType;
+  summary: string | null;
+  status: AssetStatus;
+  owner: string | null;
+  source: string | null;
+  sourceId: string | null;
+  sourceUrl: string | null;
+  liveSourceKind: LiveSourceKind | null;
+  sensitivity: SourceSensitivity;
+  howToUse: string | null;
+  limitations: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StrategyMilestone = {
+  id: string;
+  project: string;
+  slug: string;
+  title: string;
+  summary: string | null;
+  status: MilestoneStatus;
+  initiativeId: string | null;
+  projectSlug: string | null;
+  outcomeId: string | null;
+  owner: string | null;
+  dueAt: string | null;
+  completedAt: string | null;
+  successMetric: string | null;
+  evidence: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BranchProject = {
+  id: string;
+  projectSlug: string;
+  parentInitiativeId: string;
+  parentProjectSlug: string | null;
+  branchReason: string;
+  hypothesis: string;
+  timeboxStartsAt: string;
+  timeboxEndsAt: string;
+  successMetric: string;
+  riskToParent: string;
+  riskLevel: BranchRiskLevel;
+  mergeBackCondition: string;
+  killCondition: string;
+  status: BranchProjectStatus;
+  decisionLog: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AlignmentAssessment = {
+  id: string;
+  project: string;
+  subjectType: string;
+  subjectId: string | null;
+  userIntent: string;
+  alignmentLabel: AlignmentLabel;
+  score: -2 | -1 | 0 | 1 | 2;
+  confidence: AlignmentConfidence;
+  rationale: string;
+  evidence: string[];
+  risks: string[];
+  scopeGuidance: string | null;
+  missingContext: string[];
+  strategySnapshot: Record<string, unknown>;
   createdAt: string;
 };
 

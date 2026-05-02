@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   listTasks: vi.fn(),
   listSourceEvents: vi.fn(),
   listFacts: vi.fn(),
+  listStrategyNodes: vi.fn(),
+  listMilestones: vi.fn(),
+  listAssets: vi.fn(),
+  getBranchProject: vi.fn(),
   listProjectFolderChecks: vi.fn(),
   getProjectStats: vi.fn(),
   listProjectGithubRepos: vi.fn(),
@@ -78,6 +82,22 @@ vi.mock("~/persistence/d1/repository", () => ({
       return mocks.listFacts(input);
     }
 
+    listStrategyNodes(input: unknown) {
+      return mocks.listStrategyNodes(input);
+    }
+
+    listMilestones(input: unknown) {
+      return mocks.listMilestones(input);
+    }
+
+    listAssets(input: unknown) {
+      return mocks.listAssets(input);
+    }
+
+    getBranchProject(project: string) {
+      return mocks.getBranchProject(project);
+    }
+
     listProjectFolderChecks(project: string) {
       return mocks.listProjectFolderChecks(project);
     }
@@ -117,6 +137,10 @@ describe("MemoryService assistant session reliability planning", () => {
     mocks.listTasks.mockResolvedValue([]);
     mocks.listSourceEvents.mockResolvedValue([]);
     mocks.listFacts.mockResolvedValue([]);
+    mocks.listStrategyNodes.mockResolvedValue([]);
+    mocks.listMilestones.mockResolvedValue([]);
+    mocks.listAssets.mockResolvedValue([]);
+    mocks.getBranchProject.mockResolvedValue(null);
     mocks.listProjectFolderChecks.mockResolvedValue([]);
     mocks.getProjectStats.mockResolvedValue({
       document_count: 0,
@@ -165,6 +189,94 @@ describe("MemoryService assistant session reliability planning", () => {
       ]),
     );
     expect(result.write_back_policy.mode).toBe("selective_durable_facts");
+    expect(result.strategy_context).toMatchObject({
+      project: "memory-system-mcp",
+      warnings: ["no_active_vision"],
+    });
+    expect(result.operating_brief).toMatchObject({
+      time_actionability: {
+        timezone: "Pacific/Auckland",
+        weekday: "Saturday",
+        actionability_label: "requires_live_context",
+      },
+      source_freshness: {
+        retrieval_mode: "no_hits",
+      },
+      write_back_plan: {
+        recommendations: expect.arrayContaining([
+          expect.objectContaining({ tool: "finish_work_session" }),
+        ]),
+      },
+    });
+    expect(result.operating_brief.required_live_checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tool: "get_operational_context", available: true }),
+        expect.objectContaining({ tool: "zoho_crm", source_kind: "zoho_crm", available: true }),
+      ]),
+    );
+  });
+
+  it("returns an operating brief and request plan with missing live-tool warnings", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.planRequest({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "What should I do next in the repo this week?",
+      availableTools: ["prepare_assistant_session"],
+      timezone: "Pacific/Auckland",
+      now: "2026-05-01T22:30:00.000Z",
+    });
+
+    expect(result.operating_brief.required_live_checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tool: "github_project_repos",
+          available: false,
+          blocking: true,
+        }),
+        expect.objectContaining({
+          tool: "github_search_code",
+          available: false,
+          blocking: true,
+        }),
+        expect.objectContaining({
+          tool: "github_get_file",
+          required: false,
+          available: false,
+          blocking: false,
+        }),
+        expect.objectContaining({
+          tool: "calendar",
+          source_kind: "calendar",
+          available: false,
+          blocking: true,
+        }),
+      ]),
+    );
+    expect(result.operating_brief.risks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "missing_tool",
+          summary: "github_project_repos is required but unavailable.",
+        }),
+        expect.objectContaining({
+          type: "missing_tool",
+          summary: "calendar is required but unavailable.",
+        }),
+      ]),
+    );
+    expect(result.request_plan).toMatchObject({
+      objective: "What should I do next in the repo this week?",
+      tool_sequence: expect.arrayContaining([
+        expect.objectContaining({ tool: "github_project_repos", blocking: true }),
+      ]),
+      write_back_plan: {
+        recommendations: expect.arrayContaining([
+          expect.objectContaining({ tool: "finish_work_session" }),
+        ]),
+      },
+    });
   });
 });
 

@@ -2,6 +2,7 @@ import { loadConfig } from "~/config/env";
 import { buildAssistantActionPlan } from "~/domain/assistant-planning";
 import { chunkMarkdown } from "~/domain/chunking";
 import { parseMarkdownDocument } from "~/domain/frontmatter";
+import { buildOperatingBrief, buildRequestPlan } from "~/domain/operating-brief";
 import {
   buildLogicalPath,
   buildMarkdownDocument,
@@ -12,6 +13,8 @@ import {
   type ContextTask,
   type DurableFact,
   type EntityType,
+  type AlignmentAssessment,
+  type BranchProject,
   type MemoryType,
   type MemoryProject,
   normalizeProject,
@@ -22,6 +25,9 @@ import {
   type MemorySearchFilters,
   type MemorySearchHit,
   type SourceEvent,
+  type StrategyAsset,
+  type StrategyMilestone,
+  type StrategyNode,
 } from "~/domain/memory";
 import { rerankSearchHits } from "~/domain/ranking";
 import { isVisibleInProjectScope } from "~/domain/scope";
@@ -870,6 +876,11 @@ export class MemoryService {
       initiatives.map(async (initiative) => this.getInitiativeContext({ initiative: initiative.slug })),
     );
     const relatedProjects = await this.loadRelatedProjects(project, relatedProjectLinks);
+    const strategyContext = await this.getStrategyContext({
+      projectOrTopic: project,
+      userIntent: input.userIntent,
+      limit: 8,
+    });
     const retrievalMode = classifyRetrievalMode(groupedMemory);
     const warnings = buildContextWarnings({
       projectStatus,
@@ -879,24 +890,55 @@ export class MemoryService {
       initiatives,
       activeSources: input.activeSources,
     });
+    const contextHealth = {
+      retrieval_mode: retrievalMode,
+      warnings,
+      project_health: projectStatus.health,
+    };
+    const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
+    const alignmentAssessment = await this.buildAlignmentAssessment({
+      userIntent: input.userIntent ?? "",
+      proposedWork: {
+        type: "other",
+        summary: input.userIntent,
+        project_slug: project,
+      },
+      strategyContext: strategyContext.strategy_context,
+      save: false,
+    });
+    const operatingBrief = buildOperatingBrief({
+      userIntent: input.userIntent,
+      contextResolution: resolution,
+      relatedProjects,
+      operationalContext: assistantActionPlan.operational_context,
+      requestClassification: assistantActionPlan.request_classification,
+      actionability: assistantActionPlan.actionability,
+      toolPlan: assistantActionPlan.tool_plan,
+      strategyContext: strategyContext.strategy_context,
+      alignmentAssessment,
+      groupedMemory,
+      contextHealth,
+      tasks,
+      sourceEvents,
+      writeBackPolicy,
+      availableTools: input.availableTools,
+    });
 
     return {
       context_resolution: resolution,
       active_project: activeProject,
       related_projects: relatedProjects,
       initiative_context: initiativeContext,
+      strategy_context: strategyContext.strategy_context,
       current_context: currentContext,
       grouped_memory: groupedMemory,
       entities,
       tasks,
       source_events: sourceEvents,
       facts,
-      context_health: {
-        retrieval_mode: retrievalMode,
-        warnings,
-        project_health: projectStatus.health,
-      },
+      context_health: contextHealth,
       ...assistantActionPlan,
+      operating_brief: operatingBrief,
       recommended_live_mcp_checks: recommendedLiveChecks({
         project,
         activeSources: input.activeSources,
@@ -905,7 +947,7 @@ export class MemoryService {
         sourceEvents,
         warnings,
       }),
-      write_back_policy: selectiveWriteBackPolicy(input.activeSources),
+      write_back_policy: writeBackPolicy,
     };
   }
 
@@ -1221,6 +1263,552 @@ export class MemoryService {
         activeSources: [],
       }),
     };
+  }
+
+  async upsertVision(input: {
+    project?: string;
+    id?: string;
+    slug?: string;
+    type: StrategyNode["type"];
+    title: string;
+    summary?: string | null;
+    status?: StrategyNode["status"];
+    parentId?: string | null;
+    horizon?: string | null;
+    priority?: StrategyNode["priority"];
+    metric?: {
+      name?: string;
+      target_value?: string;
+      current_value?: string;
+      unit?: string;
+      direction?: StrategyNode["metricDirection"];
+    };
+    startsAt?: string | null;
+    dueAt?: string | null;
+    reviewCadence?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) {
+    const project = normalizeProject(input.project);
+    await this.ensureProject({ project });
+    if (input.parentId) {
+      const parent = await this.repo.getStrategyNodeById(input.parentId);
+      if (!parent) {
+        throw new Error(`Strategy parent ${input.parentId} not found.`);
+      }
+    }
+    return {
+      strategy_node: await this.repo.upsertStrategyNode({
+        id: input.id,
+        project,
+        slug: input.slug ? slugify(input.slug) : slugify(input.title),
+        type: input.type,
+        title: input.title,
+        summary: input.summary,
+        status: input.status,
+        parentId: input.parentId,
+        horizon: input.horizon,
+        priority: input.priority,
+        metricName: input.metric?.name,
+        targetValue: input.metric?.target_value,
+        currentValue: input.metric?.current_value,
+        metricUnit: input.metric?.unit,
+        metricDirection: input.metric?.direction,
+        startsAt: input.startsAt,
+        dueAt: input.dueAt,
+        reviewCadence: input.reviewCadence,
+        tags: input.tags,
+        metadata: input.metadata,
+      }),
+    };
+  }
+
+  async listVisions(input: {
+    project?: string;
+    type?: StrategyNode["type"];
+    status?: StrategyNode["status"];
+    parentId?: string;
+    includeChildren?: boolean;
+    limit?: number;
+  } = {}) {
+    const project = input.project ? normalizeProject(input.project) : undefined;
+    const nodes = await this.repo.listStrategyNodes({
+      project,
+      type: input.type,
+      status: input.status,
+      parentId: input.parentId,
+      limit: input.limit,
+    });
+    if (!input.includeChildren) {
+      return { strategy_nodes: nodes };
+    }
+    const childrenByParent = new Map<string, StrategyNode[]>();
+    const allNodes = await this.repo.listStrategyNodes({ project, status: input.status, limit: 100 });
+    for (const node of allNodes) {
+      if (!node.parentId) {
+        continue;
+      }
+      childrenByParent.set(node.parentId, [...(childrenByParent.get(node.parentId) ?? []), node]);
+    }
+    return {
+      strategy_nodes: nodes.map((node) => ({
+        ...node,
+        children: childrenByParent.get(node.id) ?? [],
+      })),
+    };
+  }
+
+  async getStrategyContext(input: {
+    projectOrTopic?: string;
+    userIntent?: string;
+    include?: Array<"visions" | "pillars" | "outcomes" | "initiatives" | "milestones" | "assets" | "branch_projects">;
+    horizon?: string;
+    limit?: number;
+  } = {}) {
+    const resolution = await this.resolveContext({
+      projectOrTopic: input.projectOrTopic,
+      userIntent: input.userIntent,
+    });
+    const project = resolution.active_project.slug;
+    const include = new Set(input.include ?? [
+      "visions",
+      "pillars",
+      "outcomes",
+      "initiatives",
+      "milestones",
+      "assets",
+      "branch_projects",
+    ]);
+    const compactLimit = Math.min(input.limit ?? 8, 20);
+    const query = input.userIntent;
+    const [
+      visions,
+      pillars,
+      outcomes,
+      initiatives,
+      milestones,
+      assets,
+      branchProject,
+    ] = await Promise.all([
+      include.has("visions")
+        ? this.repo.listStrategyNodes({ project, status: "active", limit: 20 })
+        : Promise.resolve([]),
+      include.has("pillars")
+        ? this.repo.listStrategyNodes({ project, type: "strategic_pillar", status: "active", limit: 5 })
+        : Promise.resolve([]),
+      include.has("outcomes")
+        ? this.repo.listStrategyNodes({ project, type: "outcome", status: "active", query, limit: compactLimit })
+        : Promise.resolve([]),
+      include.has("initiatives")
+        ? this.repo.listInitiatives({ project, status: "active", limit: compactLimit })
+        : Promise.resolve([]),
+      include.has("milestones")
+        ? this.repo.listMilestones({ project, dueBefore: daysFromNowIso(90), limit: compactLimit })
+        : Promise.resolve([]),
+      include.has("assets")
+        ? this.repo.listAssets({ project, query, limit: compactLimit })
+        : Promise.resolve([]),
+      include.has("branch_projects") ? this.repo.getBranchProject(project) : Promise.resolve(null),
+    ]);
+    const activeVisions = visions.filter((node) => node.type === "vision" || node.type === "north_star").slice(0, 2);
+    const warnings = buildStrategyWarnings({
+      visions: activeVisions,
+      milestones,
+      branchProject,
+      now: new Date(),
+    });
+    return {
+      context_resolution: resolution,
+      strategy_context: {
+        project,
+        visions: compactStrategyNodes(activeVisions),
+        pillars: compactStrategyNodes(pillars.slice(0, 5)),
+        outcomes: compactStrategyNodes(filterByHorizon(outcomes, input.horizon).slice(0, compactLimit)),
+        initiatives,
+        milestones: milestones.slice(0, compactLimit).map(compactMilestone),
+        assets: assets.slice(0, compactLimit).map(compactAsset),
+        branch_project: branchProject,
+        warnings,
+      },
+    };
+  }
+
+  async upsertAsset(input: {
+    project?: string;
+    id?: string;
+    slug?: string;
+    name: string;
+    type: StrategyAsset["type"];
+    summary?: string | null;
+    status?: StrategyAsset["status"];
+    owner?: string | null;
+    source?: string | null;
+    sourceId?: string | null;
+    sourceUrl?: string | null;
+    liveSourceKind?: StrategyAsset["liveSourceKind"];
+    sensitivity?: StrategyAsset["sensitivity"];
+    howToUse?: string | null;
+    limitations?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) {
+    const project = normalizeProject(input.project);
+    await this.ensureProject({ project });
+    return {
+      asset: await this.repo.upsertAsset({
+        ...input,
+        project,
+        slug: input.slug ? slugify(input.slug) : slugify(input.name),
+      }),
+    };
+  }
+
+  async listAssets(input: {
+    project?: string;
+    query?: string;
+    type?: string;
+    status?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  } = {}) {
+    return {
+      assets: await this.repo.listAssets({
+        ...input,
+        project: input.project ? normalizeProject(input.project) : undefined,
+      }),
+    };
+  }
+
+  async linkAsset(input: {
+    project?: string;
+    assetId: string;
+    toType: string;
+    toId: string;
+    relation: string;
+    weight?: number;
+    guidance?: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    const asset = await this.repo.getAssetById(input.assetId);
+    if (!asset) {
+      throw new Error(`Asset ${input.assetId} not found.`);
+    }
+    const project = normalizeProject(input.project ?? asset.project);
+    return this.linkMemory({
+      project,
+      fromType: "asset",
+      fromId: input.assetId,
+      toType: input.toType,
+      toId: input.toId,
+      relation: input.relation,
+      weight: input.weight,
+      metadata: {
+        ...(input.metadata ?? {}),
+        guidance: input.guidance,
+      },
+    });
+  }
+
+  async upsertMilestone(input: {
+    project?: string;
+    id?: string;
+    slug?: string;
+    title: string;
+    summary?: string | null;
+    status?: StrategyMilestone["status"];
+    initiativeId?: string | null;
+    projectSlug?: string | null;
+    outcomeId?: string | null;
+    owner?: string | null;
+    dueAt?: string | null;
+    completedAt?: string | null;
+    successMetric?: string | null;
+    evidence?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) {
+    const project = normalizeProject(input.project);
+    await this.ensureProject({ project });
+    if (input.initiativeId && !(await this.repo.getInitiativeById(input.initiativeId))) {
+      throw new Error(`Initiative ${input.initiativeId} not found.`);
+    }
+    if (input.outcomeId && !(await this.repo.getStrategyNodeById(input.outcomeId))) {
+      throw new Error(`Outcome ${input.outcomeId} not found.`);
+    }
+    return {
+      milestone: await this.repo.upsertMilestone({
+        ...input,
+        project,
+        slug: input.slug ? slugify(input.slug) : slugify(input.title),
+        projectSlug: input.projectSlug ? normalizeProject(input.projectSlug) : null,
+      }),
+    };
+  }
+
+  async createBranchProject(input: {
+    project: string;
+    displayName?: string;
+    description?: string;
+    parentInitiativeId: string;
+    parentProjectSlug?: string | null;
+    branchReason: string;
+    hypothesis: string;
+    timeboxStartsAt: string;
+    timeboxEndsAt: string;
+    successMetric: string;
+    riskToParent: string;
+    riskLevel: BranchProject["riskLevel"];
+    mergeBackCondition: string;
+    killCondition: string;
+    assets?: string[];
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) {
+    const project = normalizeProject(input.project);
+    const parentProjectSlug = input.parentProjectSlug ? normalizeProject(input.parentProjectSlug) : null;
+    const initiative = await this.repo.getInitiativeById(input.parentInitiativeId);
+    if (!initiative) {
+      throw new Error(`Parent initiative ${input.parentInitiativeId} not found.`);
+    }
+    const ensured = await this.ensureProject({
+      project,
+      displayName: input.displayName,
+      description: input.description,
+      profile: {
+        branch_project: true,
+        parent_initiative_id: input.parentInitiativeId,
+        parent_project_slug: parentProjectSlug,
+      },
+    });
+    await this.repo.linkInitiativeProject({
+      initiativeId: input.parentInitiativeId,
+      projectSlug: project,
+      role: "branch",
+      status: "active",
+    });
+    if (parentProjectSlug) {
+      await this.repo.upsertProjectRelation({
+        sourceProjectSlug: project,
+        targetProjectSlug: parentProjectSlug,
+        relation: "forked_from",
+        reason: input.branchReason,
+      });
+    }
+    const branchProject = await this.repo.upsertBranchProject({
+      projectSlug: project,
+      parentInitiativeId: input.parentInitiativeId,
+      parentProjectSlug,
+      branchReason: input.branchReason,
+      hypothesis: input.hypothesis,
+      timeboxStartsAt: input.timeboxStartsAt,
+      timeboxEndsAt: input.timeboxEndsAt,
+      successMetric: input.successMetric,
+      riskToParent: input.riskToParent,
+      riskLevel: input.riskLevel,
+      mergeBackCondition: input.mergeBackCondition,
+      killCondition: input.killCondition,
+      metadata: {
+        ...(input.metadata ?? {}),
+        tags: input.tags ?? [],
+      },
+    });
+    for (const assetId of input.assets ?? []) {
+      await this.repo.linkMemory({
+        project,
+        fromType: "branch_project",
+        fromId: branchProject!.id,
+        toType: "asset",
+        toId: assetId,
+        relation: "uses",
+      });
+    }
+    return {
+      project: ensured.project,
+      branch_project: branchProject,
+    };
+  }
+
+  async checkAlignment(input: {
+    projectOrTopic?: string;
+    userIntent: string;
+    proposedWork?: ProposedWork;
+    save?: boolean;
+  }) {
+    const strategy = await this.getStrategyContext({
+      projectOrTopic: input.projectOrTopic ?? input.proposedWork?.project_slug,
+      userIntent: input.userIntent,
+    });
+    const assessment = await this.buildAlignmentAssessment({
+      userIntent: input.userIntent,
+      proposedWork: input.proposedWork,
+      strategyContext: strategy.strategy_context,
+      save: input.save,
+    });
+    return {
+      context_resolution: strategy.context_resolution,
+      alignment_assessment: assessment,
+    };
+  }
+
+  async planRequest(input: {
+    projectOrTopic?: string;
+    userIntent: string;
+    activeSources?: string[];
+    availableTools?: string[];
+    timezone?: string;
+    now?: string;
+    businessHours?: {
+      start?: string;
+      end?: string;
+      business_days?: number[];
+    };
+    includeMemory?: boolean;
+    includeAssets?: boolean;
+    includeActiveTasks?: boolean;
+  }) {
+    const resolution = await this.resolveContext({
+      projectOrTopic: input.projectOrTopic,
+      userIntent: input.userIntent,
+    });
+    const project = resolution.active_project.slug;
+    const actionPlan = this.planAssistantAction({
+      userIntent: input.userIntent,
+      activeSources: input.activeSources,
+      availableTools: input.availableTools,
+      timezone: input.timezone,
+      now: input.now,
+      businessHours: input.businessHours,
+      projectTimezone: resolution.active_project.profile.timezone,
+    });
+    const [strategy, memory, activeTasks, sourceEvents, projectStatus] = await Promise.all([
+      this.getStrategyContext({ projectOrTopic: project, userIntent: input.userIntent }),
+      input.includeMemory === false
+        ? Promise.resolve(null)
+        : this.searchMemory({ project, query: input.userIntent, limit: 8, scope: "project" }),
+      input.includeActiveTasks === false
+        ? Promise.resolve([])
+        : this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
+      this.repo.listSourceEvents({ project, limit: 10 }),
+      this.projectStatus({ project }),
+    ]);
+    const relevantAssets = input.includeAssets === false ? [] : strategy.strategy_context.assets;
+    const alignment = await this.buildAlignmentAssessment({
+      userIntent: input.userIntent,
+      proposedWork: {
+        type: "other",
+        summary: input.userIntent,
+        project_slug: project,
+      },
+      strategyContext: strategy.strategy_context,
+      save: false,
+    });
+    const retrievalMode = memory ? classifyRetrievalMode(memory) : "not_requested";
+    const contextWarnings = buildContextWarnings({
+      projectStatus,
+      groupedMemory: memory,
+      retrievalMode,
+      entities: [],
+      initiatives: strategy.strategy_context.initiatives,
+      activeSources: input.activeSources,
+    });
+    const contextHealth = {
+      retrieval_mode: retrievalMode,
+      warnings: contextWarnings,
+      project_health: projectStatus.health,
+    };
+    const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
+    const operatingBrief = buildOperatingBrief({
+      userIntent: input.userIntent,
+      contextResolution: resolution,
+      relatedProjects: [],
+      operationalContext: actionPlan.operational_context,
+      requestClassification: actionPlan.request_classification,
+      actionability: actionPlan.actionability,
+      toolPlan: actionPlan.tool_plan,
+      strategyContext: {
+        ...strategy.strategy_context,
+        assets: relevantAssets,
+      },
+      alignmentAssessment: alignment,
+      groupedMemory: memory,
+      contextHealth,
+      tasks: activeTasks,
+      sourceEvents,
+      writeBackPolicy,
+      availableTools: input.availableTools,
+    });
+    return {
+      context_resolution: resolution,
+      operational_context: actionPlan.operational_context,
+      request_classification: actionPlan.request_classification,
+      actionability: actionPlan.actionability,
+      tool_plan: actionPlan.tool_plan,
+      strategy_context: strategy.strategy_context,
+      grouped_memory: memory,
+      active_tasks: activeTasks,
+      relevant_assets: relevantAssets,
+      alignment_assessment: alignment,
+      operating_brief: operatingBrief,
+      request_plan: buildRequestPlan({
+        userIntent: input.userIntent,
+        operatingBrief,
+        recommendedScope: alignment.scopeGuidance,
+      }),
+      recommended_scope: alignment.scopeGuidance,
+      recommended_next_steps: buildRecommendedNextSteps({
+        alignment,
+        toolPlan: actionPlan.tool_plan,
+        actionability: actionPlan.actionability,
+      }),
+      write_back_policy: writeBackPolicy,
+    };
+  }
+
+  private async buildAlignmentAssessment(input: {
+    userIntent: string;
+    proposedWork?: ProposedWork;
+    strategyContext: StrategyContextPayload;
+    save?: boolean;
+  }): Promise<AlignmentAssessment> {
+    const assessment = assessStrategicAlignment({
+      userIntent: input.userIntent,
+      proposedWork: input.proposedWork,
+      strategyContext: input.strategyContext,
+    });
+    if (!input.save) {
+      return {
+        id: "preview",
+        project: input.strategyContext.project,
+        subjectType: input.proposedWork?.type ?? "request",
+        subjectId: input.proposedWork?.milestone_id ?? input.proposedWork?.initiative_id ?? null,
+        userIntent: input.userIntent,
+        alignmentLabel: assessment.alignmentLabel,
+        score: assessment.score,
+        confidence: assessment.confidence,
+        rationale: assessment.rationale,
+        evidence: assessment.evidence,
+        risks: assessment.risks,
+        scopeGuidance: assessment.scopeGuidance,
+        missingContext: assessment.missingContext,
+        strategySnapshot: compactStrategySnapshot(input.strategyContext),
+        createdAt: new Date().toISOString(),
+      };
+    }
+    return (await this.repo.saveAlignmentAssessment({
+      project: input.strategyContext.project,
+      subjectType: input.proposedWork?.type ?? "request",
+      subjectId: input.proposedWork?.milestone_id ?? input.proposedWork?.initiative_id ?? null,
+      userIntent: input.userIntent,
+      alignmentLabel: assessment.alignmentLabel,
+      score: assessment.score,
+      confidence: assessment.confidence,
+      rationale: assessment.rationale,
+      evidence: assessment.evidence,
+      risks: assessment.risks,
+      scopeGuidance: assessment.scopeGuidance,
+      missingContext: assessment.missingContext,
+      strategySnapshot: compactStrategySnapshot(input.strategyContext),
+    }))!;
   }
 
   async getDocument(input: {
@@ -3063,6 +3651,338 @@ function connectorPolicyFor(source: string) {
     requires_approval: ["raw source content"],
     live_only: ["unknown connector payloads"],
   };
+}
+
+type ProposedWork = {
+  title?: string;
+  summary?: string;
+  type?: "task" | "project" | "branch_project" | "milestone" | "initiative" | "research" | "other";
+  project_slug?: string;
+  initiative_id?: string;
+  milestone_id?: string;
+  asset_ids?: string[];
+  expected_outcome?: string;
+  estimated_effort?: "small" | "medium" | "large" | "unknown";
+};
+
+type StrategyContextPayload = {
+  project: string;
+  visions: Array<ReturnType<typeof compactStrategyNode>>;
+  pillars: Array<ReturnType<typeof compactStrategyNode>>;
+  outcomes: Array<ReturnType<typeof compactStrategyNode>>;
+  initiatives: MemoryInitiative[];
+  milestones: Array<ReturnType<typeof compactMilestone>>;
+  assets: Array<ReturnType<typeof compactAsset>>;
+  branch_project: BranchProject | null;
+  warnings: string[];
+};
+
+function compactStrategyNodes(nodes: StrategyNode[]) {
+  return nodes.map(compactStrategyNode);
+}
+
+function compactStrategyNode(node: StrategyNode) {
+  return {
+    id: node.id,
+    slug: node.slug,
+    type: node.type,
+    title: node.title,
+    summary: truncateNullable(node.summary, 240),
+    status: node.status,
+    parent_id: node.parentId,
+    horizon: node.horizon,
+    priority: node.priority,
+    metric: node.metricName
+      ? {
+          name: node.metricName,
+          target_value: node.targetValue,
+          current_value: node.currentValue,
+          unit: node.metricUnit,
+          direction: node.metricDirection,
+        }
+      : null,
+    due_at: node.dueAt,
+    review_cadence: node.reviewCadence,
+  };
+}
+
+function compactMilestone(milestone: StrategyMilestone) {
+  return {
+    id: milestone.id,
+    slug: milestone.slug,
+    title: milestone.title,
+    summary: truncateNullable(milestone.summary, 220),
+    status: milestone.status,
+    initiative_id: milestone.initiativeId,
+    project_slug: milestone.projectSlug,
+    outcome_id: milestone.outcomeId,
+    due_at: milestone.dueAt,
+    success_metric: milestone.successMetric,
+  };
+}
+
+function compactAsset(asset: StrategyAsset) {
+  return {
+    id: asset.id,
+    slug: asset.slug,
+    name: asset.name,
+    type: asset.type,
+    summary: truncateNullable(asset.summary, 220),
+    status: asset.status,
+    source: asset.source,
+    source_url: asset.sourceUrl,
+    live_source_kind: asset.liveSourceKind,
+    sensitivity: asset.sensitivity,
+    how_to_use: truncateNullable(asset.howToUse, 240),
+    limitations: truncateNullable(asset.limitations, 180),
+  };
+}
+
+function truncateNullable(value: string | null, max: number) {
+  return value ? truncate(value, max) : null;
+}
+
+function filterByHorizon(nodes: StrategyNode[], horizon?: string) {
+  if (!horizon) {
+    return nodes;
+  }
+  const normalized = horizon.toLowerCase();
+  return nodes.filter((node) => node.horizon?.toLowerCase().includes(normalized));
+}
+
+function buildStrategyWarnings(input: {
+  visions: StrategyNode[];
+  milestones: StrategyMilestone[];
+  branchProject: BranchProject | null;
+  now: Date;
+}) {
+  const warnings: string[] = [];
+  if (input.visions.length === 0) {
+    warnings.push("no_active_vision");
+  }
+  if (input.milestones.some((milestone) => !milestone.successMetric)) {
+    warnings.push("missing_success_metric");
+  }
+  if (input.branchProject) {
+    if (!input.branchProject.parentInitiativeId) {
+      warnings.push("no_parent_initiative_for_branch_project");
+    }
+    const endsAt = Date.parse(input.branchProject.timeboxEndsAt);
+    if (Number.isFinite(endsAt) && endsAt < input.now.getTime() && input.branchProject.status === "active") {
+      warnings.push("branch_timebox_expired");
+    }
+  }
+  return warnings;
+}
+
+function assessStrategicAlignment(input: {
+  userIntent: string;
+  proposedWork?: ProposedWork;
+  strategyContext: StrategyContextPayload;
+}) {
+  const text = [
+    input.userIntent,
+    input.proposedWork?.title,
+    input.proposedWork?.summary,
+    input.proposedWork?.expected_outcome,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const evidence: string[] = [];
+  const risks: string[] = [];
+  const missingContext: string[] = [];
+  const hasStrategy =
+    input.strategyContext.visions.length > 0 ||
+    input.strategyContext.pillars.length > 0 ||
+    input.strategyContext.outcomes.length > 0 ||
+    input.strategyContext.initiatives.length > 0;
+
+  if (!hasStrategy) {
+    missingContext.push("No active vision, pillar, outcome, or initiative is available for this project.");
+    return alignmentResult({
+      alignmentLabel: "unknown_until_more_context",
+      score: 0,
+      confidence: "low",
+      rationale: "There is not enough active strategic context to classify this work without guessing.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "First capture or link the relevant vision, initiative, or outcome, then re-check alignment.",
+    });
+  }
+
+  if (input.strategyContext.branch_project?.status === "killed" || text.includes("kill condition")) {
+    risks.push("The work appears to touch a killed branch project or an explicit kill condition.");
+    return alignmentResult({
+      alignmentLabel: "conflicts",
+      score: -2,
+      confidence: "high",
+      rationale: "The request conflicts with branch-project governance or a kill condition.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "Do not proceed unless the branch decision is reopened and recorded.",
+    });
+  }
+
+  const linkedInitiative = input.proposedWork?.initiative_id
+    ? input.strategyContext.initiatives.find((initiative) => initiative.id === input.proposedWork?.initiative_id)
+    : null;
+  const linkedMilestone = input.proposedWork?.milestone_id
+    ? input.strategyContext.milestones.find((milestone) => milestone.id === input.proposedWork?.milestone_id)
+    : null;
+  const matchingOutcome = input.strategyContext.outcomes.find((outcome) => textMatchesNode(text, outcome));
+  const matchingPillar = input.strategyContext.pillars.find((pillar) => textMatchesNode(text, pillar));
+  const matchingVision = input.strategyContext.visions.find((vision) => textMatchesNode(text, vision));
+
+  if (linkedMilestone || linkedInitiative || matchingOutcome || matchingPillar || matchingVision) {
+    evidence.push(
+      linkedMilestone
+        ? `Linked milestone: ${linkedMilestone.title}`
+        : linkedInitiative
+          ? `Linked initiative: ${linkedInitiative.title}`
+          : matchingOutcome
+            ? `Matches outcome: ${matchingOutcome.title}`
+            : matchingPillar
+              ? `Matches pillar: ${matchingPillar.title}`
+              : `Matches vision: ${matchingVision!.title}`,
+    );
+    return alignmentResult({
+      alignmentLabel: "directly_advances",
+      score: 2,
+      confidence: linkedMilestone || linkedInitiative ? "high" : "medium",
+      rationale: "The work maps to an active strategic object in the current project context.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "Scope the work around the linked strategic outcome and keep evidence of progress attached.",
+    });
+  }
+
+  const hasAssetSupport = (input.proposedWork?.asset_ids?.length ?? 0) > 0 || supportIntentPattern.test(text);
+  if (hasAssetSupport) {
+    evidence.push("The work appears to improve or use an enabling asset, dependency, documentation, or process.");
+    return alignmentResult({
+      alignmentLabel: "indirectly_supports",
+      score: 1,
+      confidence: input.proposedWork?.asset_ids?.length ? "high" : "medium",
+      rationale: "The request supports execution capacity but is not itself tied to a strategic outcome.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "Keep the scope small and link the resulting asset or dependency to the initiative it supports.",
+    });
+  }
+
+  if (input.proposedWork?.type === "branch_project" || input.strategyContext.branch_project) {
+    if (input.strategyContext.warnings.includes("branch_timebox_expired")) {
+      risks.push("The active branch project timebox has expired.");
+      return alignmentResult({
+        alignmentLabel: "distraction_risk",
+        score: -1,
+        confidence: "high",
+        rationale: "The project is governed as a branch experiment, but its timebox needs review before more work.",
+        evidence,
+        risks,
+        missingContext,
+        scopeGuidance: "Review success, merge-back, and kill conditions before adding new scope.",
+      });
+    }
+    evidence.push("The work is framed as a governed branch project or experiment.");
+    return alignmentResult({
+      alignmentLabel: "neutral_experiment",
+      score: 0,
+      confidence: "medium",
+      rationale: "The work can be valid as an experiment if it stays inside the branch protocol.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "Keep the experiment within its hypothesis, timebox, success metric, and kill condition.",
+    });
+  }
+
+  if (input.proposedWork?.estimated_effort === "large") {
+    risks.push("Large effort is not linked to an active strategic object.");
+    return alignmentResult({
+      alignmentLabel: "distraction_risk",
+      score: -1,
+      confidence: "medium",
+      rationale: "The work may consume meaningful capacity without a visible link to active strategy.",
+      evidence,
+      risks,
+      missingContext,
+      scopeGuidance: "Reduce to a discovery task or link it to a specific initiative, milestone, or outcome first.",
+    });
+  }
+
+  missingContext.push("No explicit initiative, milestone, asset, or outcome match was found.");
+  return alignmentResult({
+    alignmentLabel: "unknown_until_more_context",
+    score: 0,
+    confidence: "low",
+    rationale: "The request is plausible but does not expose enough strategic linkage for a confident label.",
+    evidence,
+    risks,
+    missingContext,
+    scopeGuidance: "Ask for the intended outcome or parent initiative before committing significant work.",
+  });
+}
+
+const supportIntentPattern = /\b(document|docs|asset|tool|dependency|refactor|setup|process|template|dataset|repo|enable|support)\b/i;
+
+function textMatchesNode(
+  text: string,
+  node: { slug: string; title: string; summary: string | null },
+) {
+  const tokens = `${node.slug} ${node.title} ${node.summary ?? ""}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 3);
+  return tokens.some((token) => text.includes(token));
+}
+
+function alignmentResult(input: Omit<AlignmentAssessment, "id" | "project" | "subjectType" | "subjectId" | "userIntent" | "strategySnapshot" | "createdAt">) {
+  return input;
+}
+
+function compactStrategySnapshot(strategyContext: StrategyContextPayload) {
+  return {
+    project: strategyContext.project,
+    vision_ids: strategyContext.visions.map((node) => node.id),
+    pillar_ids: strategyContext.pillars.map((node) => node.id),
+    outcome_ids: strategyContext.outcomes.map((node) => node.id),
+    initiative_ids: strategyContext.initiatives.map((initiative) => initiative.id),
+    milestone_ids: strategyContext.milestones.map((milestone) => milestone.id),
+    asset_ids: strategyContext.assets.map((asset) => asset.id),
+    branch_project_id: strategyContext.branch_project?.id ?? null,
+    warnings: strategyContext.warnings,
+  };
+}
+
+function buildRecommendedNextSteps(input: {
+  alignment: AlignmentAssessment;
+  toolPlan: { required_tools: Array<{ tool: string; reason: string; timing: string }> };
+  actionability: { recommended_now?: string[] };
+}) {
+  const steps = [...(input.actionability.recommended_now ?? [])];
+  for (const tool of input.toolPlan.required_tools.slice(0, 3)) {
+    steps.push(`Use ${tool.tool} ${tool.timing.replace(/_/g, " ")}: ${tool.reason}`);
+  }
+  if (input.alignment.alignmentLabel === "directly_advances") {
+    steps.push("Proceed with a scope tied to the matched strategic outcome.");
+  } else if (input.alignment.alignmentLabel === "indirectly_supports") {
+    steps.push("Keep the work bounded and link the resulting asset or dependency.");
+  } else if (input.alignment.alignmentLabel === "neutral_experiment") {
+    steps.push("Confirm hypothesis, timebox, success metric, merge-back, and kill condition.");
+  } else if (input.alignment.alignmentLabel === "distraction_risk") {
+    steps.push("Narrow the work or attach it to an active initiative before committing capacity.");
+  } else if (input.alignment.alignmentLabel === "conflicts") {
+    steps.push("Pause and resolve the strategic conflict before taking action.");
+  } else {
+    steps.push("Gather the missing parent initiative, outcome, or asset context before deciding.");
+  }
+  return [...new Set(steps)].slice(0, 8);
 }
 
 function extractFactCandidates(text: string) {
