@@ -10,6 +10,11 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     name: "memory-system-mcp",
     version: "0.1.0",
   });
+  const businessHoursSchema = z.object({
+    start: z.string().optional(),
+    end: z.string().optional(),
+    business_days: z.array(z.number().int().min(1).max(7)).optional(),
+  });
 
   server.registerTool(
     "ensure_project",
@@ -127,19 +132,100 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         project_or_topic: z.string().optional(),
         user_intent: z.string().optional(),
         active_sources: z.array(z.string()).optional(),
+        available_tools: z.array(z.string()).optional(),
+        timezone: z.string().optional(),
+        now: z.string().optional(),
+        business_hours: businessHoursSchema.optional(),
         authoritative: z.boolean().optional(),
       }),
       annotations: {
         idempotentHint: true,
       },
     },
-    async ({ project_or_topic, user_intent, active_sources, authoritative }) =>
+    async ({
+      project_or_topic,
+      user_intent,
+      active_sources,
+      available_tools,
+      timezone,
+      now,
+      business_hours,
+      authoritative,
+    }) =>
       textResult(
         await service.prepareAssistantSession({
           projectOrTopic: project_or_topic,
           userIntent: user_intent,
           activeSources: active_sources,
+          availableTools: available_tools,
+          timezone,
+          now,
+          businessHours: business_hours,
           authoritative,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_operational_context",
+    {
+      description:
+        "Return validated time/date/weekday/timezone context, weekend/business-day classification, business-hour status, and public-holiday placeholder state.",
+      inputSchema: z.object({
+        timezone: z.string().optional(),
+        now: z.string().optional(),
+        business_hours: businessHoursSchema.optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ timezone, now, business_hours }) =>
+      textResult(
+        service.getOperationalContext({
+          timezone,
+          now,
+          businessHours: business_hours,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "plan_assistant_action",
+    {
+      description:
+        "Build a deterministic Assistant Context OS action plan with time actionability, request classification, required tools, confirmation guardrails, and write-back recommendations.",
+      inputSchema: z.object({
+        user_intent: z.string().min(1),
+        project_or_topic: z.string().optional(),
+        active_sources: z.array(z.string()).optional(),
+        available_tools: z.array(z.string()).optional(),
+        timezone: z.string().optional(),
+        now: z.string().optional(),
+        business_hours: businessHoursSchema.optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      user_intent,
+      active_sources,
+      available_tools,
+      timezone,
+      now,
+      business_hours,
+    }) =>
+      textResult(
+        service.planAssistantAction({
+          userIntent: user_intent,
+          activeSources: active_sources,
+          availableTools: available_tools,
+          timezone,
+          now,
+          businessHours: business_hours,
         }),
       ),
   );

@@ -1,4 +1,5 @@
 import { loadConfig } from "~/config/env";
+import { buildAssistantActionPlan } from "~/domain/assistant-planning";
 import { chunkMarkdown } from "~/domain/chunking";
 import { parseMarkdownDocument } from "~/domain/frontmatter";
 import {
@@ -808,6 +809,14 @@ export class MemoryService {
     projectOrTopic?: string;
     userIntent?: string;
     activeSources?: string[];
+    availableTools?: string[];
+    timezone?: string;
+    now?: string;
+    businessHours?: {
+      start?: string;
+      end?: string;
+      business_days?: number[];
+    };
     authoritative?: boolean;
   }) {
     const resolution = await this.resolveContext({
@@ -817,6 +826,15 @@ export class MemoryService {
     const activeProject = resolution.active_project;
     const project = activeProject.slug;
     await this.ensureProject({ project });
+    const assistantActionPlan = this.planAssistantAction({
+      userIntent: input.userIntent,
+      activeSources: input.activeSources,
+      availableTools: input.availableTools,
+      timezone: input.timezone,
+      now: input.now,
+      businessHours: input.businessHours,
+      projectTimezone: activeProject.profile.timezone,
+    });
 
     const [
       currentContext,
@@ -878,6 +896,7 @@ export class MemoryService {
         warnings,
         project_health: projectStatus.health,
       },
+      ...assistantActionPlan,
       recommended_live_mcp_checks: recommendedLiveChecks({
         project,
         activeSources: input.activeSources,
@@ -888,6 +907,52 @@ export class MemoryService {
       }),
       write_back_policy: selectiveWriteBackPolicy(input.activeSources),
     };
+  }
+
+  getOperationalContext(input: {
+    timezone?: string;
+    now?: string;
+    businessHours?: {
+      start?: string;
+      end?: string;
+      business_days?: number[];
+    };
+    projectTimezone?: unknown;
+  } = {}) {
+    return {
+      time_context: buildAssistantActionPlan({
+        timezone: input.timezone,
+        now: input.now,
+        businessHours: input.businessHours,
+        projectTimezone: input.projectTimezone,
+        envDefaultTimezone: this.config.defaultTimezone,
+      }).operational_context,
+    };
+  }
+
+  planAssistantAction(input: {
+    userIntent?: string;
+    activeSources?: string[];
+    availableTools?: string[];
+    timezone?: string;
+    now?: string;
+    businessHours?: {
+      start?: string;
+      end?: string;
+      business_days?: number[];
+    };
+    projectTimezone?: unknown;
+  }) {
+    return buildAssistantActionPlan({
+      userIntent: input.userIntent,
+      activeSources: input.activeSources,
+      availableTools: input.availableTools,
+      timezone: input.timezone,
+      now: input.now,
+      businessHours: input.businessHours,
+      projectTimezone: input.projectTimezone,
+      envDefaultTimezone: this.config.defaultTimezone,
+    });
   }
 
   async resolveContext(input: { projectOrTopic?: string; userIntent?: string }) {

@@ -31,6 +31,9 @@ It returns a session plan instead of raw search results:
 
 - active project and project-switching reason
 - candidate and related projects
+- validated time/date/weekday/timezone context
+- weekend, business-day, business-hour, and actionability assessment
+- deterministic request classification and required tool plan
 - linked initiative context
 - canonical current context
 - grouped memory results
@@ -40,6 +43,16 @@ It returns a session plan instead of raw search results:
 - write-back policy
 
 This lets the assistant understand "what world am I in?" before it starts answering or acting.
+
+## Reliability Core
+
+Phase 1 reliability planning is computed at request time and does not require new D1 tables.
+
+- `get_operational_context` validates IANA timezone, current local date, weekday, weekend/business-day status, business hours, and public-holiday placeholder state.
+- `plan_assistant_action` classifies the request, assesses actionability, identifies required/optional tools, lists confirmation-gated actions, and recommends safe write-back tools.
+- `prepare_assistant_session` includes the same reliability fields additively so older clients keep working while newer clients can follow the richer plan.
+
+The reliability core uses generic rule sets and connector policy defaults only. It must not depend on private customer names, tenant IDs, secrets, or personal data.
 
 ## Durable Memory Model
 

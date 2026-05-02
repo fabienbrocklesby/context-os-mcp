@@ -27,6 +27,7 @@ const envSchema = z.object({
   WORKERS_AI_EMBEDDING_MODEL: z.string().default("@cf/baai/bge-base-en-v1.5"),
   WORKDRIVE_SHARED_ROOT_FOLDER_ID: z.string().optional(),
   WORKDRIVE_PROJECTS_ROOT_FOLDER_ID: z.string().optional(),
+  DEFAULT_TIMEZONE: z.string().optional(),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -64,6 +65,7 @@ export function loadConfig(env: Env) {
       projectsRootFolderId: parsed.WORKDRIVE_PROJECTS_ROOT_FOLDER_ID,
     },
     workersAiEmbeddingModel: parsed.WORKERS_AI_EMBEDDING_MODEL,
+    defaultTimezone: parsed.DEFAULT_TIMEZONE,
   };
 }
 

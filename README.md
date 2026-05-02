@@ -37,6 +37,8 @@ memory.prepare_assistant_session(project_or_topic, user_intent, active_sources?)
 The response includes:
 
 - active project and possible related projects
+- validated date, weekday, timezone, business-day, and actionability context
+- deterministic request classification and tool-use plan
 - linked initiative context
 - canonical current context
 - grouped memory results
@@ -54,6 +56,8 @@ Memory is separated by project slug. Project-scoped retrieval searches that proj
 ## Tool Highlights
 
 - `prepare_assistant_session`
+- `get_operational_context`
+- `plan_assistant_action`
 - `resolve_context`
 - `search_memory`
 - `list_initiatives`

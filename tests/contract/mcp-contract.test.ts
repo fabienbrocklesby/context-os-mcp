@@ -69,6 +69,87 @@ vi.mock("~/domain/service", () => {
         write_back_policy: {
           mode: "selective_durable_facts",
         },
+        operational_context: {
+          timezone: "Pacific/Auckland",
+          weekday: "Saturday",
+          is_weekend: true,
+        },
+        request_classification: {
+          primary_category: "planning_scheduling",
+        },
+        actionability: {
+          label: "prep_or_async_only",
+        },
+        tool_plan: {
+          required_tools: [],
+        },
+      };
+    }
+
+    getOperationalContext() {
+      return {
+        time_context: {
+          now_utc: "2026-05-01T22:30:00.000Z",
+          timezone: "Pacific/Auckland",
+          timezone_source: "input",
+          local_date: "2026-05-02",
+          local_time: "10:30:00",
+          weekday: "Saturday",
+          weekday_index: 6,
+          utc_offset_minutes: 720,
+          is_weekend: true,
+          is_business_day: false,
+          is_business_hours: false,
+          business_hours: {
+            start: "09:00",
+            end: "17:00",
+            business_days: [1, 2, 3, 4, 5],
+          },
+          holiday_context: {
+            status: "not_configured",
+            is_public_holiday: null,
+            source: null,
+            note: "Public holiday calendars are not configured in Phase 1.",
+          },
+        },
+      };
+    }
+
+    planAssistantAction() {
+      return {
+        operational_context: this.getOperationalContext().time_context,
+        request_classification: {
+          primary_category: "planning_scheduling",
+          categories: {
+            planning_scheduling: true,
+            code_repo: false,
+            customer_sales_business: true,
+            memory_context: false,
+            external_source_dependent: false,
+            destructive_write_action: false,
+          },
+          matched_rules: ["planning/scheduling terms"],
+          risk_level: "medium",
+        },
+        actionability: {
+          label: "prep_or_async_only",
+          reasons: ["Saturday is not a configured business day."],
+          recommended_now: ["Do prep, admin, drafting, review, or asynchronous work."],
+          guardrails: ["Do not recommend business calls today."],
+        },
+        tool_plan: {
+          required_tools: [
+            {
+              tool: "get_operational_context",
+              reason: "Validate actual date and weekday.",
+              timing: "before_answer",
+            },
+          ],
+          optional_tools: [],
+          forbidden_without_confirmation: [],
+          write_back_recommendations: [],
+          connector_policy_defaults: {},
+        },
       };
     }
 
@@ -187,6 +268,8 @@ describe("MCP contract", () => {
         "update_project_profile",
         "project_status",
         "prepare_assistant_session",
+        "get_operational_context",
+        "plan_assistant_action",
         "resolve_context",
         "search_memory",
         "get_document",
@@ -243,11 +326,53 @@ describe("MCP contract", () => {
       active_project: {
         slug: "memory-system-mcp",
       },
+      operational_context: {
+        weekday: "Saturday",
+      },
+      actionability: {
+        label: "prep_or_async_only",
+      },
       write_back_policy: {
         mode: "selective_durable_facts",
       },
     });
     expect(payload.recommended_live_mcp_checks[0]).toContain("github");
+  });
+
+  it("returns reliability core MCP payloads", async () => {
+    const client = await connectTestClient(env, principal);
+
+    const operationalResponse = await client.callTool({
+      name: "get_operational_context",
+      arguments: {
+        timezone: "Pacific/Auckland",
+        now: "2026-05-01T22:30:00.000Z",
+      },
+    });
+    const operationalPayload = JSON.parse(readFirstTextContent(operationalResponse));
+    expect(operationalPayload.time_context).toMatchObject({
+      timezone: "Pacific/Auckland",
+      weekday: "Saturday",
+      is_weekend: true,
+    });
+
+    const planResponse = await client.callTool({
+      name: "plan_assistant_action",
+      arguments: {
+        user_intent: "Plan customer calls today.",
+        timezone: "Pacific/Auckland",
+        now: "2026-05-01T22:30:00.000Z",
+      },
+    });
+    const planPayload = JSON.parse(readFirstTextContent(planResponse));
+    expect(planPayload).toMatchObject({
+      request_classification: {
+        primary_category: "planning_scheduling",
+      },
+      actionability: {
+        label: "prep_or_async_only",
+      },
+    });
   });
 
   it("returns OpenAI-compatible search and fetch payload shapes", async () => {
