@@ -9,6 +9,8 @@ import type { RequestClassification } from "~/domain/request-classification";
 import type { TimeContext } from "~/domain/time-context";
 import type { ToolPlan } from "~/domain/tool-policy";
 import { connectorPolicyFor } from "~/domain/tool-policy";
+import { isToolAvailable, normalizeToolName } from "~/domain/tool-availability";
+import type { EnvironmentToolGuidance } from "~/domain/environment-capabilities";
 
 type Timing = "before_answer" | "before_action" | "before_write";
 
@@ -107,6 +109,7 @@ export type OperatingBriefInput = {
   sourceEvents: SourceEvent[];
   writeBackPolicy: WriteBackPolicyForBrief;
   availableTools?: string[];
+  environmentToolGuidance?: EnvironmentToolGuidance;
 };
 
 export function buildOperatingBrief(input: OperatingBriefInput) {
@@ -184,6 +187,7 @@ export function buildOperatingBrief(input: OperatingBriefInput) {
     required_live_checks: requiredLiveChecks,
     risks,
     recommended_next_actions: recommendedNextActions,
+    environment_tool_guidance: input.environmentToolGuidance ?? null,
     write_back_plan: buildWriteBackPlan(input),
   };
 }
@@ -285,36 +289,6 @@ function addCheck(
     available,
     blocking,
   });
-}
-
-function isToolAvailable(tool: string, sourceKind: string, availableTools?: string[]) {
-  if (!availableTools?.length) {
-    return true;
-  }
-  const normalized = new Set(availableTools.map(normalizeToolName));
-  if (normalized.has(normalizeToolName(tool)) || normalized.has(normalizeToolName(sourceKind))) {
-    return true;
-  }
-  if (sourceKind === "memory" && normalized.has("memory")) {
-    return true;
-  }
-  if (sourceKind === "github" && normalized.has("github")) {
-    return true;
-  }
-  if (sourceKind === "calendar") {
-    return normalized.has("zoho_calendar") || normalized.has("google_calendar") || normalized.has("outlook_calendar");
-  }
-  if (sourceKind === "zoho_crm") {
-    return normalized.has("crm") || normalized.has("zoho");
-  }
-  if (sourceKind === "zoho_mail") {
-    return normalized.has("email") || normalized.has("mail") || normalized.has("zoho");
-  }
-  return false;
-}
-
-function normalizeToolName(tool: string) {
-  return tool.toLowerCase().replace(/[-.\s]+/g, "_");
 }
 
 function sourceKindForTool(tool: string) {

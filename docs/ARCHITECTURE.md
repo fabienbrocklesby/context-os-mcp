@@ -8,6 +8,7 @@ The system separates four concerns:
 - Structured metadata and relationships live in Cloudflare D1.
 - Semantic retrieval lives in Cloudflare Vectorize.
 - Session orchestration lives in the MCP service layer.
+- Environment-aware capability planning tells each AI client how to use tools available in its own host.
 
 ## System Map
 
@@ -46,8 +47,20 @@ Both return an `operating_brief` instead of leaving clients to assemble raw sear
 - context health warnings
 - safe next actions and confirmation guardrails
 - write-back policy
+- environment/tool guidance for Claude, ChatGPT, Codex, generic MCP clients, local CLI, or other clients
 
 This lets the assistant understand "what world am I in?" before it starts answering or acting.
+
+## Environment Capability Layer
+
+ContextOS should not directly own every possible MCP server, connector, app, or API. Instead, it stores and returns capability manifests:
+
+- `client_environments`: known client hosts such as `claude`, `chatgpt`, `codex`, `generic_mcp`, `local_cli`, and `other`.
+- `tool_capabilities`: source/action/sensitivity/write-policy metadata for memory, GitHub, WorkDrive, CRM, mail, calendar, Shopify, Cloudflare, terminal, migration, and durable write-back.
+- `environment_capabilities`: per-environment availability, invocation style, tool name, usage instructions, limitations, and priority.
+- `plan_environment_tool_use`: resolves the current environment, compares required capabilities with `available_tools`, separates ContextOS-executable checks from client-executed checks, and returns confirmation gates and fallback plans.
+
+This keeps client instructions thin: call ContextOS first, follow returned environment-specific instructions, then record what was checked and what remains unverified.
 
 ## Operating Brief Composition
 
@@ -153,8 +166,17 @@ Retrieval combines:
 - Project-aware ranking.
 - Grouped results by memory type.
 - Diagnostics that distinguish keyword fallback, missing indexes, namespace mismatch, and likely embedding/filter issues.
+- Full Vectorize metadata retrieval for search hydration, with unfiltered fallback diagnostics when metadata-filtered semantic search returns no hits despite D1 chunks.
 
 Project scope is enforced by metadata, not by private-name filters. A search for project `<project-slug>` may include documents from `<project-slug>` and the reserved `shared` namespace. A search for `shared` stays in the shared namespace. Other project namespaces are not visible unless they are explicitly linked through initiative, entity, or related-project scope.
+
+## Non-Destructive Migration
+
+The memory migration tools are metadata-first and history-preserving:
+
+- `analyze_memory_migration` is read-only and reports duplicate projects, duplicate/stale current-context docs, placeholder docs, vector gaps, and proposed links.
+- `run_memory_migration` defaults to dry-run and only applies metadata-safe aliases, canonical/merged markers, graph links, audit events, and source-event summaries when `apply=true`.
+- WorkDrive files, D1 rows, snapshots, queues, OAuth data, and Vectorize data are never deleted by these tools.
 
 ## Compatibility
 

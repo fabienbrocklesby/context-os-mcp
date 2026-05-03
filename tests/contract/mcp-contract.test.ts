@@ -128,6 +128,50 @@ vi.mock("~/domain/service", () => {
       };
     }
 
+    async listClientEnvironments() {
+      return { environments: [{ slug: "codex", displayName: "Codex" }] };
+    }
+
+    async upsertClientEnvironment() {
+      return { environment: { slug: "codex", displayName: "Codex" } };
+    }
+
+    async listToolCapabilities() {
+      return { capabilities: [{ slug: "contextos_memory", displayName: "ContextOS Memory" }] };
+    }
+
+    async upsertToolCapability() {
+      return { capability: { slug: "contextos_memory", displayName: "ContextOS Memory" } };
+    }
+
+    async listEnvironmentCapabilities() {
+      return { capabilities: [] };
+    }
+
+    async upsertEnvironmentCapability() {
+      return { environment_capability: { environmentSlug: "codex", capabilitySlug: "contextos_memory" } };
+    }
+
+    planEnvironmentToolUse() {
+      return {
+        environment: { slug: "codex", display_name: "Codex" },
+        available_capabilities: [{ capability: "contextos_memory" }],
+        unavailable_required_capabilities: [],
+      };
+    }
+
+    async analyzeMemoryMigration() {
+      return { dry_run: true, duplicate_projects: [], safety: { deletes_workdrive_files: false } };
+    }
+
+    async runMemoryMigration() {
+      return { dry_run: true, applied: false };
+    }
+
+    async getMigrationAudit() {
+      return { events: [] };
+    }
+
     getOperationalContext() {
       return {
         time_context: {
@@ -384,6 +428,13 @@ describe("MCP contract", () => {
         "prepare_assistant_session",
         "get_operational_context",
         "plan_assistant_action",
+        "list_client_environments",
+        "upsert_client_environment",
+        "list_tool_capabilities",
+        "upsert_tool_capability",
+        "list_environment_capabilities",
+        "upsert_environment_capability",
+        "plan_environment_tool_use",
         "resolve_context",
         "search_memory",
         "get_document",
@@ -422,6 +473,9 @@ describe("MCP contract", () => {
         "admin_reconcile_workdrive",
         "admin_reindex_document",
         "admin_reindex_all",
+        "analyze_memory_migration",
+        "run_memory_migration",
+        "get_migration_audit",
         "retrieval_diagnostics",
       ]),
     );

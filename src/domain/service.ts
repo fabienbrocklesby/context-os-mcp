@@ -1,6 +1,12 @@
 import { loadConfig } from "~/config/env";
 import { buildAssistantActionPlan } from "~/domain/assistant-planning";
 import { chunkMarkdown } from "~/domain/chunking";
+import {
+  defaultClientEnvironments,
+  defaultEnvironmentCapabilities,
+  defaultToolCapabilities,
+  planEnvironmentToolUse,
+} from "~/domain/environment-capabilities";
 import { parseMarkdownDocument } from "~/domain/frontmatter";
 import { buildOperatingBrief, buildRequestPlan } from "~/domain/operating-brief";
 import {
@@ -33,7 +39,7 @@ import { rerankSearchHits } from "~/domain/ranking";
 import { isVisibleInProjectScope } from "~/domain/scope";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { embedTexts } from "~/integrations/workers-ai/embeddings";
-import { queryMemoryIndex, replaceDocumentVectors, deleteVectors } from "~/integrations/vectorize/client";
+import { queryMemoryIndexWithDiagnostics, replaceDocumentVectors, deleteVectors } from "~/integrations/vectorize/client";
 import { ZohoWorkDriveClient, type ZohoFile } from "~/integrations/zoho/client";
 import { MemoryRepository } from "~/persistence/d1/repository";
 
@@ -625,6 +631,8 @@ export class MemoryService {
     const queryVariants = uniqueQueryVariants(input.query);
     let queryVariantDiagnostics: Array<{ label: string; query: string; vector_hits: number }> =
       queryVariants.map((variant) => ({ ...variant, vector_hits: 0 }));
+    const vectorProviderDiagnostics: unknown[] = [];
+    const unfilteredVectorDiagnostics: unknown[] = [];
     try {
       const vectorResult = await withTimeout(
         (async () => {
@@ -634,7 +642,7 @@ export class MemoryService {
           );
           const variantResults = await Promise.all(
             queryVariants.map(async (variant, index) => {
-              const variantHits = await queryMemoryIndex(
+              const result = await queryMemoryIndexWithDiagnostics(
                 this.env,
                 embeddings[index],
                 namespaces,
@@ -652,9 +660,41 @@ export class MemoryService {
                   candidateLimit: semanticCandidateLimit(input.limit),
                 },
               );
-              return { ...variant, hits: variantHits };
+              vectorProviderDiagnostics.push({
+                label: variant.label,
+                filtered: true,
+                ...result.diagnostics,
+              });
+              return { ...variant, hits: result.hits, embedding: embeddings[index] };
             }),
           );
+          if (variantResults.every((variant) => variant.hits.length === 0)) {
+            const unfilteredResults = await Promise.all(
+              variantResults.map(async (variant) => {
+                const result = await queryMemoryIndexWithDiagnostics(
+                  this.env,
+                  variant.embedding,
+                  namespaces,
+                  {
+                    project: normalizedProject,
+                    includeSuperseded: input.includeSuperseded,
+                    limit: input.limit,
+                    candidateLimit: semanticCandidateLimit(input.limit),
+                    filtered: false,
+                  },
+                );
+                unfilteredVectorDiagnostics.push({
+                  label: variant.label,
+                  filtered: false,
+                  ...result.diagnostics,
+                });
+                return { ...variant, hits: result.hits };
+              }),
+            );
+            for (let index = 0; index < variantResults.length; index += 1) {
+              variantResults[index] = unfilteredResults[index]!;
+            }
+          }
           queryVariantDiagnostics = variantResults.map((variant) => ({
             label: variant.label,
             query: variant.query,
@@ -728,6 +768,7 @@ export class MemoryService {
     const keywordResults = keywordMatches
       .filter((document) => isVisibleInProjectScope(document, normalizedProject))
       .filter((document) => !rankedDocumentIds.has(document.id))
+      .sort((left, right) => keywordFallbackScore(right, normalizedProject) - keywordFallbackScore(left, normalizedProject))
       .slice(0, Math.max(0, (input.limit ?? 8) - ranked.length));
 
     const documents = input.authoritative
@@ -779,6 +820,9 @@ export class MemoryService {
         vector_error: vectorError,
         namespaces,
         query_variants: queryVariantDiagnostics,
+        vector_provider: vectorProviderDiagnostics,
+        unfiltered_vector_provider: unfilteredVectorDiagnostics,
+        d1_chunk_count_for_project: await this.repo.getProjectStats(normalizedProject).then((stats) => stats.chunk_count).catch(() => null),
         keyword_fallback_used: keywordResults.length > 0,
         keyword_fallback_due_to_empty_semantic: hits.length === 0 && keywordResults.length > 0,
       },
@@ -814,6 +858,7 @@ export class MemoryService {
   async prepareAssistantSession(input: {
     projectOrTopic?: string;
     userIntent?: string;
+    environment?: string;
     activeSources?: string[];
     availableTools?: string[];
     timezone?: string;
@@ -896,6 +941,14 @@ export class MemoryService {
       project_health: projectStatus.health,
     };
     const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
+    const environmentToolGuidance = this.planEnvironmentToolUse({
+      environment: input.environment,
+      userIntent: input.userIntent ?? "",
+      projectOrTopic: input.projectOrTopic ?? project,
+      availableTools: input.availableTools,
+      activeSources: input.activeSources,
+      includeInstructions: true,
+    });
     const alignmentAssessment = await this.buildAlignmentAssessment({
       userIntent: input.userIntent ?? "",
       proposedWork: {
@@ -922,6 +975,7 @@ export class MemoryService {
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
+      environmentToolGuidance,
     });
 
     return {
@@ -937,6 +991,7 @@ export class MemoryService {
       source_events: sourceEvents,
       facts,
       context_health: contextHealth,
+      environment_tool_guidance: environmentToolGuidance,
       ...assistantActionPlan,
       operating_brief: operatingBrief,
       recommended_live_mcp_checks: recommendedLiveChecks({
@@ -994,6 +1049,64 @@ export class MemoryService {
       businessHours: input.businessHours,
       projectTimezone: input.projectTimezone,
       envDefaultTimezone: this.config.defaultTimezone,
+    });
+  }
+
+  listClientEnvironments() {
+    return this.repo
+      .listClientEnvironments()
+      .then((environments) => ({ environments }))
+      .catch(() => ({ environments: defaultClientEnvironments() }));
+  }
+
+  async upsertClientEnvironment(input: {
+    slug: string;
+    displayName: string;
+    description?: string | null;
+    defaultToolStyle?: string | null;
+    notes?: string | null;
+  }) {
+    return { environment: await this.repo.upsertClientEnvironment(input) };
+  }
+
+  listToolCapabilities() {
+    return this.repo.listToolCapabilities().then((capabilities) => ({ capabilities })).catch(() => ({
+      capabilities: defaultToolCapabilities(),
+    }));
+  }
+
+  async upsertToolCapability(input: Parameters<MemoryRepository["upsertToolCapability"]>[0]) {
+    return { capability: await this.repo.upsertToolCapability(input) };
+  }
+
+  listEnvironmentCapabilities(input: { environment?: string } = {}) {
+    return this.repo
+      .listEnvironmentCapabilities(input.environment)
+      .then((capabilities) => ({ capabilities }))
+      .catch(() => ({ capabilities: defaultEnvironmentCapabilities() }));
+  }
+
+  async upsertEnvironmentCapability(input: Parameters<MemoryRepository["upsertEnvironmentCapability"]>[0]) {
+    return { environment_capability: await this.repo.upsertEnvironmentCapability(input) };
+  }
+
+  planEnvironmentToolUse(input: {
+    environment?: string;
+    userIntent: string;
+    projectOrTopic?: string;
+    availableTools?: string[];
+    activeSources?: string[];
+    proposedAction?: string;
+    includeInstructions?: boolean;
+  }) {
+    return planEnvironmentToolUse({
+      environment: input.environment,
+      userIntent: input.userIntent,
+      projectOrTopic: input.projectOrTopic,
+      availableTools: input.availableTools,
+      activeSources: input.activeSources,
+      proposedAction: input.proposedAction,
+      includeInstructions: input.includeInstructions,
     });
   }
 
@@ -1653,6 +1766,7 @@ export class MemoryService {
   async planRequest(input: {
     projectOrTopic?: string;
     userIntent: string;
+    environment?: string;
     activeSources?: string[];
     availableTools?: string[];
     timezone?: string;
@@ -1717,6 +1831,14 @@ export class MemoryService {
       project_health: projectStatus.health,
     };
     const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
+    const environmentToolGuidance = this.planEnvironmentToolUse({
+      environment: input.environment,
+      userIntent: input.userIntent,
+      projectOrTopic: input.projectOrTopic ?? project,
+      availableTools: input.availableTools,
+      activeSources: input.activeSources,
+      includeInstructions: true,
+    });
     const operatingBrief = buildOperatingBrief({
       userIntent: input.userIntent,
       contextResolution: resolution,
@@ -1736,6 +1858,7 @@ export class MemoryService {
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
+      environmentToolGuidance,
     });
     return {
       context_resolution: resolution,
@@ -1748,6 +1871,7 @@ export class MemoryService {
       active_tasks: activeTasks,
       relevant_assets: relevantAssets,
       alignment_assessment: alignment,
+      environment_tool_guidance: environmentToolGuidance,
       operating_brief: operatingBrief,
       request_plan: buildRequestPlan({
         userIntent: input.userIntent,
@@ -2472,6 +2596,181 @@ export class MemoryService {
         "assistant sessions expand broad requests into intent, entity, initiative, project, and recent activity queries",
       ],
     };
+  }
+
+  async analyzeMemoryMigration(input: { project?: string; includeMarkdownLinks?: boolean } = {}) {
+    const [projects, aliases, documents] = await Promise.all([
+      this.repo.listProjects(),
+      this.repo.listProjectAliases().catch(() => []),
+      this.repo.listAllDocuments({ project: input.project, limit: 5000 }).catch(() => []),
+    ]);
+    const statsByProject = new Map<string, Awaited<ReturnType<MemoryRepository["getProjectStats"]>>>();
+    for (const project of projects) {
+      statsByProject.set(project.slug, await this.repo.getProjectStats(project.slug).catch(() => ({
+        document_count: 0,
+        current_context_count: 0,
+        active_decision_count: 0,
+        chunk_count: 0,
+        failed_job_count: 0,
+      })));
+    }
+    const duplicateProjectGroups = detectDuplicateProjectGroups(projects, statsByProject, aliases);
+    const placeholderDocs = documents
+      .filter((document) => document.memoryType === "current_context")
+      .filter((document) => isPlaceholderPath(document.path) || isPlaceholderTitle(document.title))
+      .map((document) => ({
+        document_id: document.id,
+        project: document.project,
+        title: document.title,
+        path: document.path,
+        status: document.status,
+        active: document.active,
+        proposed_action: document.active ? "review_for_noncanonical_marker" : "already_inactive_history",
+      }));
+    const duplicateCurrentContextPaths = detectDuplicateCurrentContextPaths(documents);
+    const vectorGaps = [...statsByProject.entries()]
+      .filter(([project]) => !input.project || project === normalizeProject(input.project))
+      .filter(([, stats]) => stats.document_count > 0 && stats.chunk_count === 0)
+      .map(([project, stats]) => ({ project, ...stats, proposed_action: "enqueue_reindex_or_inspect_failed_jobs" }));
+    const markdownLinkProposals = input.includeMarkdownLinks === false ? [] : buildMarkdownLinkProposals(duplicateProjectGroups);
+    const memoryLinkProposals = duplicateProjectGroups.flatMap((group) => [
+      {
+        project: group.canonical_project,
+        from_type: "project",
+        from_id: group.duplicate_project,
+        to_type: "project",
+        to_id: group.canonical_project,
+        relation: "merged_into",
+      },
+      {
+        project: group.canonical_project,
+        from_type: "project",
+        from_id: group.canonical_project,
+        to_type: "project",
+        to_id: group.duplicate_project,
+        relation: "has_alias_project",
+      },
+    ]);
+    const actions = [
+      ...duplicateProjectGroups.map((group) => ({
+        type: "project_canonicalization",
+        canonical_project: group.canonical_project,
+        duplicate_project: group.duplicate_project,
+        safe_to_apply: true,
+      })),
+      ...memoryLinkProposals.map((proposal) => ({
+        type: "memory_link",
+        ...proposal,
+        safe_to_apply: true,
+      })),
+    ];
+    return {
+      migration_slug: "environment-capabilities-and-memory-migration",
+      dry_run: true,
+      summary: {
+        duplicate_project_groups: duplicateProjectGroups.length,
+        placeholder_current_context_docs: placeholderDocs.length,
+        duplicate_current_context_paths: duplicateCurrentContextPaths.length,
+        vector_indexing_gaps: vectorGaps.length,
+        proposed_actions: actions.length,
+      },
+      duplicate_projects: duplicateProjectGroups,
+      placeholder_current_context_docs: placeholderDocs,
+      duplicate_current_context_paths: duplicateCurrentContextPaths,
+      vector_indexing_gaps: vectorGaps,
+      markdown_link_proposals: markdownLinkProposals,
+      memory_link_proposals: memoryLinkProposals,
+      actions,
+      safety: {
+        deletes_workdrive_files: false,
+        deletes_d1_rows: false,
+        resets_vectorize: false,
+        raw_private_data_policy: "durable summaries and pointers only",
+      },
+    };
+  }
+
+  async runMemoryMigration(input: { dryRun?: boolean; apply?: boolean; project?: string } = {}) {
+    const apply = input.apply === true;
+    const dryRun = input.dryRun !== false || !apply;
+    const analysis = await this.analyzeMemoryMigration({ project: input.project });
+    if (dryRun) {
+      await this.repo.recordMigrationAuditEvent({
+        migrationSlug: analysis.migration_slug,
+        phase: "dry_run",
+        dryRun: true,
+        status: "ok",
+        summary: `Dry run found ${analysis.summary.proposed_actions} metadata-safe proposed actions.`,
+        counts: analysis.summary,
+      }).catch(() => undefined);
+      return {
+        dry_run: true,
+        applied: false,
+        analysis,
+      };
+    }
+
+    let aliasesWritten = 0;
+    let projectMarkersWritten = 0;
+    let linksWritten = 0;
+    for (const group of analysis.duplicate_projects) {
+      await this.repo.updateProjectProfile({
+        slug: group.canonical_project,
+        aliases: [group.duplicate_project, ...group.aliases],
+        canonicalProject: group.canonical_project,
+        canonicalStatus: "canonical",
+      });
+      await this.repo.updateProjectProfile({
+        slug: group.duplicate_project,
+        canonicalProject: group.canonical_project,
+        mergedIntoProject: group.canonical_project,
+        canonicalStatus: "merged",
+        noncanonicalReason: "Likely duplicate slug variant; preserved as merged/noncanonical metadata.",
+      });
+      aliasesWritten += 1 + group.aliases.length;
+      projectMarkersWritten += 2;
+    }
+    for (const link of analysis.memory_link_proposals) {
+      await this.repo.linkMemory({
+        project: link.project,
+        fromType: link.from_type,
+        fromId: link.from_id,
+        toType: link.to_type,
+        toId: link.to_id,
+        relation: link.relation,
+        metadata: { migration_slug: analysis.migration_slug, non_destructive: true },
+      });
+      linksWritten += 1;
+    }
+    await this.repo.recordMigrationAuditEvent({
+      migrationSlug: analysis.migration_slug,
+      phase: "apply",
+      dryRun: false,
+      status: "ok",
+      summary: `Applied metadata-safe canonicalization: ${projectMarkersWritten} project markers, ${aliasesWritten} aliases, ${linksWritten} links.`,
+      counts: { project_markers: projectMarkersWritten, aliases: aliasesWritten, memory_links: linksWritten },
+    });
+    await this.repo.saveSourceEvent({
+      project: "memory-system-mcp",
+      source: "migration",
+      sourceId: `${analysis.migration_slug}:apply`,
+      eventType: "memory_reconciliation",
+      title: "Applied metadata-safe memory migration",
+      summary: "Marked duplicate project slug variants as canonical/merged and created idempotent graph links without deleting WorkDrive files or D1 rows.",
+      sensitivity: "internal",
+      savePolicy: "durable_summary",
+      metadata: { project_markers: projectMarkersWritten, aliases: aliasesWritten, memory_links: linksWritten },
+    }).catch(() => undefined);
+    return {
+      dry_run: false,
+      applied: true,
+      counts: { project_markers: projectMarkersWritten, aliases: aliasesWritten, memory_links: linksWritten },
+      analysis,
+    };
+  }
+
+  async getMigrationAudit(input: { migrationSlug?: string; limit?: number } = {}) {
+    return { events: await this.repo.listMigrationAuditEvents(input) };
   }
 
   private async resolveSearchScopeProjects(input: {
@@ -3347,6 +3646,12 @@ function projectMatchScore(project: MemoryProject, normalized: string | null, qu
   if (normalized && project.slug === normalized) {
     score += 100;
   }
+  if (project.mergedIntoProject) {
+    score -= 80;
+  }
+  if (project.canonicalStatus === "canonical") {
+    score += 5;
+  }
   for (const term of queryTerms(query)) {
     if (project.slug.includes(term)) {
       score += 8;
@@ -3446,6 +3751,127 @@ function dedupeSearchHitsByBestScore(hits: MemorySearchHit[]) {
     }
   }
   return [...byDocumentHeading.values()];
+}
+
+function keywordFallbackScore(document: { project: string; memoryType: string; active: boolean; canonical: boolean; status: string }, project: string) {
+  let score = 0;
+  if (document.project === project) {
+    score += 4;
+  }
+  if (document.project === "shared") {
+    score -= 1;
+  }
+  if (document.memoryType === "current_context") {
+    score += 3;
+  }
+  if (document.memoryType === "decision") {
+    score += 2;
+  }
+  if (document.active) {
+    score += 1;
+  }
+  if (document.canonical) {
+    score += 1;
+  }
+  if (document.status === "superseded" || document.status === "archived") {
+    score -= 10;
+  }
+  return score;
+}
+
+function detectDuplicateProjectGroups(
+  projects: MemoryProject[],
+  statsByProject: Map<string, { document_count: number; current_context_count: number; active_decision_count: number; chunk_count: number }>,
+  aliases: Array<{ alias: string; projectSlug: string }>,
+) {
+  const byCompactSlug = new Map<string, MemoryProject[]>();
+  for (const project of projects) {
+    const key = compactProjectSlug(project.slug);
+    byCompactSlug.set(key, [...(byCompactSlug.get(key) ?? []), project]);
+  }
+  const aliasByProject = new Map<string, string[]>();
+  for (const alias of aliases) {
+    aliasByProject.set(alias.projectSlug, [...(aliasByProject.get(alias.projectSlug) ?? []), alias.alias]);
+  }
+  return [...byCompactSlug.values()].flatMap((group) => {
+    if (group.length < 2) {
+      return [];
+    }
+    const canonical = [...group].sort((left, right) =>
+      projectCanonicalScore(right, statsByProject) - projectCanonicalScore(left, statsByProject) ||
+      right.updatedAt.localeCompare(left.updatedAt),
+    )[0]!;
+    return group
+      .filter((project) => project.slug !== canonical.slug)
+      .map((project) => ({
+        canonical_project: canonical.slug,
+        duplicate_project: project.slug,
+        normalized_key: compactProjectSlug(project.slug),
+        aliases: aliasByProject.get(project.slug) ?? [],
+        canonical_reason: "richer metadata/doc/chunk count/latest update wins unless explicit canonical metadata exists",
+        canonical_stats: statsByProject.get(canonical.slug) ?? null,
+        duplicate_stats: statsByProject.get(project.slug) ?? null,
+        proposed_actions: [
+          "add duplicate slug as alias to canonical project",
+          "mark duplicate project canonical_status=merged and merged_into_project=canonical",
+          "create structured memory_links in both directions",
+        ],
+      }));
+  });
+}
+
+function projectCanonicalScore(
+  project: MemoryProject,
+  statsByProject: Map<string, { document_count: number; current_context_count: number; active_decision_count: number; chunk_count: number }>,
+) {
+  const explicit = project.canonicalProject === project.slug || project.canonicalStatus === "canonical" ? 1000 : 0;
+  const mergedPenalty = project.mergedIntoProject ? -1000 : 0;
+  const stats = statsByProject.get(project.slug);
+  const metadataScore = Object.keys(project.profile ?? {}).length;
+  return explicit + mergedPenalty + metadataScore + (stats?.document_count ?? 0) * 4 + (stats?.current_context_count ?? 0) * 8 + (stats?.active_decision_count ?? 0) * 6 + (stats?.chunk_count ?? 0);
+}
+
+function compactProjectSlug(slug: string) {
+  return normalizeProject(slug).replace(/[^a-z0-9]/g, "");
+}
+
+function isPlaceholderPath(path: string) {
+  return /\b(record|placeholder|bootstrap)\b/i.test(path);
+}
+
+function isPlaceholderTitle(title: string) {
+  return /\b(record|placeholder|bootstrap|no current state)\b/i.test(title);
+}
+
+function detectDuplicateCurrentContextPaths(documents: Array<{ id: string; project: string; title: string; path: string; memoryType: string; active: boolean; status: string }>) {
+  const groups = new Map<string, typeof documents>();
+  for (const document of documents) {
+    if (document.memoryType !== "current_context") {
+      continue;
+    }
+    const key = `${document.project}:${document.path.replace(/\s+\d{2}-\d{2}-\d{4}.*(?=\.md$)/, "").toLowerCase()}`;
+    groups.set(key, [...(groups.get(key) ?? []), document]);
+  }
+  return [...groups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => ({
+      project: group[0]!.project,
+      canonical_document_id: group.find((document) => document.active)?.id ?? group[0]!.id,
+      duplicate_document_ids: group.filter((document) => !document.active).map((document) => document.id),
+      paths: group.map((document) => document.path),
+      proposed_action: "preserve history and mark old path variants noncanonical/superseded where not already inactive",
+    }));
+}
+
+function buildMarkdownLinkProposals(groups: ReturnType<typeof detectDuplicateProjectGroups>) {
+  return groups.map((group) => ({
+    project: group.canonical_project,
+    target: group.duplicate_project,
+    link: `[[project:${group.duplicate_project}]]`,
+    proposed_location: "canonical project overview/current-context",
+    safe_to_apply: false,
+    reason: "Markdown links are proposed for human/Obsidian navigation; structured memory_links remain the AI source.",
+  }));
 }
 
 function mergeQueryVariantDiagnostics(

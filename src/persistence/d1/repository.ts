@@ -2,9 +2,12 @@ import type {
   AlignmentAssessment,
   BranchProject,
   ChunkRecord,
+  ClientEnvironment,
   ContextTask,
   DurableFact,
+  EnvironmentCapability,
   InitiativeProject,
+  MigrationAuditEvent,
   MemoryFrontmatter,
   MemoryEntity,
   MemoryInitiative,
@@ -18,6 +21,7 @@ import type {
   StrategyAsset,
   StrategyMilestone,
   StrategyNode,
+  ToolCapability,
 } from "~/domain/memory";
 
 type DocumentRow = {
@@ -86,8 +90,68 @@ type ProjectRow = {
   snippets_folder_id: string | null;
   repo_index_folder_id: string | null;
   last_health_json: string | null;
+  canonical_project?: string | null;
+  merged_into_project?: string | null;
+  noncanonical_reason?: string | null;
+  canonical_status?: string | null;
+  canonical_updated_at?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type ClientEnvironmentRow = {
+  id: string;
+  slug: string;
+  display_name: string;
+  description: string | null;
+  default_tool_style: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ToolCapabilityRow = {
+  id: string;
+  slug: string;
+  display_name: string;
+  source_kind: string;
+  action_kind: string;
+  source_of_truth: number;
+  volatile: number;
+  sensitivity: ToolCapability["sensitivity"];
+  requires_confirmation: number;
+  destructive: number;
+  save_policy: ToolCapability["savePolicy"];
+  instructions_markdown: string | null;
+  input_hints_json: string | null;
+  output_hints_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type EnvironmentCapabilityRow = {
+  id: string;
+  environment_slug: string;
+  capability_slug: string;
+  availability: EnvironmentCapability["availability"];
+  invocation_style: EnvironmentCapability["invocationStyle"];
+  tool_name: string | null;
+  usage_instructions_markdown: string | null;
+  limitations_markdown: string | null;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type MigrationAuditEventRow = {
+  id: string;
+  migration_slug: string;
+  phase: string;
+  dry_run: number;
+  status: string;
+  summary: string;
+  counts_json: string | null;
+  created_at: string;
 };
 
 type ProjectGithubRepoRow = {
@@ -341,6 +405,15 @@ export class MemoryRepository {
       .bind(slugOrAlias)
       .first<ProjectRow>();
     if (direct) {
+      if (direct.merged_into_project && direct.merged_into_project !== direct.slug) {
+        const canonical = await this.db
+          .prepare("SELECT * FROM projects WHERE slug = ?1")
+          .bind(direct.merged_into_project)
+          .first<ProjectRow>();
+        if (canonical) {
+          return mapProject(canonical);
+        }
+      }
       return mapProject(direct);
     }
 
@@ -444,6 +517,10 @@ export class MemoryRepository {
     status?: "active" | "paused" | "archived";
     profile?: Record<string, unknown>;
     aliases?: string[];
+    canonicalProject?: string | null;
+    mergedIntoProject?: string | null;
+    noncanonicalReason?: string | null;
+    canonicalStatus?: string | null;
   }) {
     const existing = await this.getProject(input.slug);
     if (!existing) {
@@ -454,7 +531,16 @@ export class MemoryRepository {
       .prepare(
         `
           UPDATE projects
-          SET display_name = ?2, description = ?3, status = ?4, profile_json = ?5, updated_at = ?6
+          SET display_name = ?2,
+              description = ?3,
+              status = ?4,
+              profile_json = ?5,
+              updated_at = ?6,
+              canonical_project = ?7,
+              merged_into_project = ?8,
+              noncanonical_reason = ?9,
+              canonical_status = ?10,
+              canonical_updated_at = ?6
           WHERE slug = ?1
         `,
       )
@@ -465,6 +551,10 @@ export class MemoryRepository {
         input.status ?? existing.status,
         JSON.stringify(input.profile ?? existing.profile),
         now,
+        input.canonicalProject !== undefined ? input.canonicalProject : existing.canonicalProject ?? existing.slug,
+        input.mergedIntoProject !== undefined ? input.mergedIntoProject : existing.mergedIntoProject ?? null,
+        input.noncanonicalReason !== undefined ? input.noncanonicalReason : existing.noncanonicalReason ?? null,
+        input.canonicalStatus ?? existing.canonicalStatus ?? "canonical",
       )
       .run();
 
@@ -484,6 +574,168 @@ export class MemoryRepository {
     }
 
     return this.getProject(existing.slug);
+  }
+
+  async listClientEnvironments() {
+    const result = await this.db
+      .prepare("SELECT * FROM client_environments ORDER BY slug ASC")
+      .all<ClientEnvironmentRow>();
+    return result.results.map(mapClientEnvironment);
+  }
+
+  async upsertClientEnvironment(input: {
+    slug: string;
+    displayName: string;
+    description?: string | null;
+    defaultToolStyle?: string | null;
+    notes?: string | null;
+  }) {
+    const now = new Date().toISOString();
+    await this.db
+      .prepare(
+        `
+          INSERT INTO client_environments (
+            id, slug, display_name, description, default_tool_style, notes, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+          ON CONFLICT(slug) DO UPDATE SET
+            display_name = excluded.display_name,
+            description = excluded.description,
+            default_tool_style = excluded.default_tool_style,
+            notes = excluded.notes,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .bind(crypto.randomUUID(), input.slug, input.displayName, input.description ?? null, input.defaultToolStyle ?? null, input.notes ?? null, now)
+      .run();
+    return (await this.listClientEnvironments()).find((environment) => environment.slug === input.slug) ?? null;
+  }
+
+  async listToolCapabilities() {
+    const result = await this.db
+      .prepare("SELECT * FROM tool_capabilities ORDER BY source_kind ASC, slug ASC")
+      .all<ToolCapabilityRow>();
+    return result.results.map(mapToolCapability);
+  }
+
+  async upsertToolCapability(input: {
+    slug: string;
+    displayName: string;
+    sourceKind: string;
+    actionKind: string;
+    sourceOfTruth?: boolean;
+    volatile?: boolean;
+    sensitivity?: ToolCapability["sensitivity"];
+    requiresConfirmation?: boolean;
+    destructive?: boolean;
+    savePolicy?: ToolCapability["savePolicy"];
+    instructionsMarkdown?: string | null;
+    inputHints?: Record<string, unknown>;
+    outputHints?: Record<string, unknown>;
+  }) {
+    const now = new Date().toISOString();
+    await this.db
+      .prepare(
+        `
+          INSERT INTO tool_capabilities (
+            id, slug, display_name, source_kind, action_kind, source_of_truth, volatile,
+            sensitivity, requires_confirmation, destructive, save_policy,
+            instructions_markdown, input_hints_json, output_hints_json, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+          ON CONFLICT(slug) DO UPDATE SET
+            display_name = excluded.display_name,
+            source_kind = excluded.source_kind,
+            action_kind = excluded.action_kind,
+            source_of_truth = excluded.source_of_truth,
+            volatile = excluded.volatile,
+            sensitivity = excluded.sensitivity,
+            requires_confirmation = excluded.requires_confirmation,
+            destructive = excluded.destructive,
+            save_policy = excluded.save_policy,
+            instructions_markdown = excluded.instructions_markdown,
+            input_hints_json = excluded.input_hints_json,
+            output_hints_json = excluded.output_hints_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.slug,
+        input.displayName,
+        input.sourceKind,
+        input.actionKind,
+        input.sourceOfTruth ? 1 : 0,
+        input.volatile ? 1 : 0,
+        input.sensitivity ?? "internal",
+        input.requiresConfirmation ? 1 : 0,
+        input.destructive ? 1 : 0,
+        input.savePolicy ?? "durable_summary",
+        input.instructionsMarkdown ?? null,
+        JSON.stringify(input.inputHints ?? {}),
+        JSON.stringify(input.outputHints ?? {}),
+        now,
+      )
+      .run();
+    return (await this.listToolCapabilities()).find((capability) => capability.slug === input.slug) ?? null;
+  }
+
+  async listEnvironmentCapabilities(environmentSlug?: string) {
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM environment_capabilities
+          WHERE (?1 IS NULL OR environment_slug = ?1)
+          ORDER BY environment_slug ASC, priority ASC, capability_slug ASC
+        `,
+      )
+      .bind(environmentSlug ?? null)
+      .all<EnvironmentCapabilityRow>();
+    return result.results.map(mapEnvironmentCapability);
+  }
+
+  async upsertEnvironmentCapability(input: {
+    environmentSlug: string;
+    capabilitySlug: string;
+    availability?: EnvironmentCapability["availability"];
+    invocationStyle?: EnvironmentCapability["invocationStyle"];
+    toolName?: string | null;
+    usageInstructionsMarkdown?: string | null;
+    limitationsMarkdown?: string | null;
+    priority?: number;
+  }) {
+    const now = new Date().toISOString();
+    await this.db
+      .prepare(
+        `
+          INSERT INTO environment_capabilities (
+            id, environment_slug, capability_slug, availability, invocation_style, tool_name,
+            usage_instructions_markdown, limitations_markdown, priority, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+          ON CONFLICT(environment_slug, capability_slug) DO UPDATE SET
+            availability = excluded.availability,
+            invocation_style = excluded.invocation_style,
+            tool_name = excluded.tool_name,
+            usage_instructions_markdown = excluded.usage_instructions_markdown,
+            limitations_markdown = excluded.limitations_markdown,
+            priority = excluded.priority,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.environmentSlug,
+        input.capabilitySlug,
+        input.availability ?? "unknown",
+        input.invocationStyle ?? "manual_instruction",
+        input.toolName ?? null,
+        input.usageInstructionsMarkdown ?? null,
+        input.limitationsMarkdown ?? null,
+        input.priority ?? 100,
+        now,
+      )
+      .run();
+    return (await this.listEnvironmentCapabilities(input.environmentSlug)).find(
+      (capability) => capability.capabilitySlug === input.capabilitySlug,
+    ) ?? null;
   }
 
   async recordProjectFolderCheck(input: {
@@ -1182,6 +1434,65 @@ export class MemoryRepository {
     return result.results.map((row) => mapDocument(row)!);
   }
 
+  async listAllDocuments(input: { project?: string; limit?: number } = {}) {
+    const limit = Math.min(input.limit ?? 1000, 5000);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM documents
+          WHERE (?1 IS NULL OR project = ?1)
+          ORDER BY project ASC, memory_type ASC, path ASC, updated_at DESC
+          LIMIT ?2
+        `,
+      )
+      .bind(input.project ?? null, limit)
+      .all<DocumentRow>();
+    return result.results.map((row) => mapDocument(row)!);
+  }
+
+  async listProjectAliases() {
+    const result = await this.db
+      .prepare("SELECT alias, project_slug, created_at FROM project_aliases ORDER BY project_slug ASC, alias ASC")
+      .all<{ alias: string; project_slug: string; created_at: string }>();
+    return result.results.map((row) => ({
+      alias: row.alias,
+      projectSlug: row.project_slug,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async markDocumentsNoncanonical(input: {
+    documentIds: string[];
+    canonicalGroup?: string | null;
+    reason: string;
+    notes?: Record<string, unknown>;
+  }) {
+    const now = new Date().toISOString();
+    for (const documentId of input.documentIds) {
+      await this.db
+        .prepare(
+          `
+            UPDATE documents
+            SET active = 0,
+                canonical = 0,
+                canonical_group = ?2,
+                noncanonical_reason = ?3,
+                migration_notes_json = ?4,
+                updated_at = ?5
+            WHERE id = ?1
+          `,
+        )
+        .bind(
+          documentId,
+          input.canonicalGroup ?? null,
+          input.reason,
+          JSON.stringify(input.notes ?? {}),
+          now,
+        )
+        .run();
+    }
+  }
+
   async getProjectStats(projectSlug: string) {
     const [documentCount, currentContextCount, decisionCount, chunkCount, failedJobs] = await Promise.all([
       this.db
@@ -1213,6 +1524,51 @@ export class MemoryRepository {
       chunk_count: chunkCount?.count ?? 0,
       failed_job_count: failedJobs?.count ?? 0,
     };
+  }
+
+  async recordMigrationAuditEvent(input: {
+    migrationSlug: string;
+    phase: string;
+    dryRun: boolean;
+    status: string;
+    summary: string;
+    counts?: Record<string, unknown>;
+  }) {
+    await this.db
+      .prepare(
+        `
+          INSERT INTO migration_audit_events (
+            id, migration_slug, phase, dry_run, status, summary, counts_json, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        `,
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.migrationSlug,
+        input.phase,
+        input.dryRun ? 1 : 0,
+        input.status,
+        input.summary,
+        JSON.stringify(input.counts ?? {}),
+        new Date().toISOString(),
+      )
+      .run();
+  }
+
+  async listMigrationAuditEvents(input: { migrationSlug?: string; limit?: number } = {}) {
+    const limit = Math.min(input.limit ?? 50, 200);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM migration_audit_events
+          WHERE (?1 IS NULL OR migration_slug = ?1)
+          ORDER BY created_at DESC
+          LIMIT ?2
+        `,
+      )
+      .bind(input.migrationSlug ?? null, limit)
+      .all<MigrationAuditEventRow>();
+    return result.results.map(mapMigrationAuditEvent);
   }
 
   async upsertInitiative(input: {
@@ -2543,8 +2899,76 @@ function mapProject(row?: ProjectRow | null): MemoryProject | null {
     snippetsFolderId: row.snippets_folder_id,
     repoIndexFolderId: row.repo_index_folder_id,
     lastHealth: row.last_health_json ? parseJsonObject(row.last_health_json) : null,
+    canonicalProject: row.canonical_project,
+    mergedIntoProject: row.merged_into_project,
+    noncanonicalReason: row.noncanonical_reason,
+    canonicalStatus: row.canonical_status,
+    canonicalUpdatedAt: row.canonical_updated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapClientEnvironment(row: ClientEnvironmentRow): ClientEnvironment {
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.display_name,
+    description: row.description,
+    defaultToolStyle: row.default_tool_style,
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapToolCapability(row: ToolCapabilityRow): ToolCapability {
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.display_name,
+    sourceKind: row.source_kind,
+    actionKind: row.action_kind,
+    sourceOfTruth: row.source_of_truth === 1,
+    volatile: row.volatile === 1,
+    sensitivity: row.sensitivity,
+    requiresConfirmation: row.requires_confirmation === 1,
+    destructive: row.destructive === 1,
+    savePolicy: row.save_policy,
+    instructionsMarkdown: row.instructions_markdown,
+    inputHints: parseJsonObject(row.input_hints_json),
+    outputHints: parseJsonObject(row.output_hints_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapEnvironmentCapability(row: EnvironmentCapabilityRow): EnvironmentCapability {
+  return {
+    id: row.id,
+    environmentSlug: row.environment_slug,
+    capabilitySlug: row.capability_slug,
+    availability: row.availability,
+    invocationStyle: row.invocation_style,
+    toolName: row.tool_name,
+    usageInstructionsMarkdown: row.usage_instructions_markdown,
+    limitationsMarkdown: row.limitations_markdown,
+    priority: row.priority,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapMigrationAuditEvent(row: MigrationAuditEventRow): MigrationAuditEvent {
+  return {
+    id: row.id,
+    migrationSlug: row.migration_slug,
+    phase: row.phase,
+    dryRun: row.dry_run === 1,
+    status: row.status,
+    summary: row.summary,
+    counts: parseJsonObject(row.counts_json),
+    createdAt: row.created_at,
   };
 }
 

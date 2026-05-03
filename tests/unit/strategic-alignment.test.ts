@@ -19,7 +19,7 @@ vi.mock("~/integrations/workers-ai/embeddings", () => ({
 }));
 
 vi.mock("~/integrations/vectorize/client", () => ({
-  queryMemoryIndex: vi.fn(),
+  queryMemoryIndexWithDiagnostics: vi.fn(async () => ({ hits: [], diagnostics: {} })),
   replaceDocumentVectors: vi.fn(),
   deleteVectors: vi.fn(),
 }));

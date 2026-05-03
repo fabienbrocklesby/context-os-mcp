@@ -154,8 +154,76 @@ export type MemoryProject = {
   snippetsFolderId: string | null;
   repoIndexFolderId: string | null;
   lastHealth: Record<string, unknown> | null;
+  canonicalProject?: string | null;
+  mergedIntoProject?: string | null;
+  noncanonicalReason?: string | null;
+  canonicalStatus?: string | null;
+  canonicalUpdatedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ClientEnvironment = {
+  id: string;
+  slug: string;
+  displayName: string;
+  description: string | null;
+  defaultToolStyle: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ToolCapability = {
+  id: string;
+  slug: string;
+  displayName: string;
+  sourceKind: string;
+  actionKind: string;
+  sourceOfTruth: boolean;
+  volatile: boolean;
+  sensitivity: "public" | "internal" | "confidential" | "sensitive";
+  requiresConfirmation: boolean;
+  destructive: boolean;
+  savePolicy: "durable_summary" | "live_only" | "requires_approval";
+  instructionsMarkdown: string | null;
+  inputHints: Record<string, unknown>;
+  outputHints: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EnvironmentCapability = {
+  id: string;
+  environmentSlug: string;
+  capabilitySlug: string;
+  availability: "available" | "unavailable" | "unknown" | "user_configured";
+  invocationStyle:
+    | "mcp_tool"
+    | "connector"
+    | "chatgpt_app"
+    | "terminal_command"
+    | "local_file"
+    | "api_call"
+    | "manual_instruction"
+    | "other";
+  toolName: string | null;
+  usageInstructionsMarkdown: string | null;
+  limitationsMarkdown: string | null;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MigrationAuditEvent = {
+  id: string;
+  migrationSlug: string;
+  phase: string;
+  dryRun: boolean;
+  status: string;
+  summary: string;
+  counts: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type ProjectGithubRepo = {

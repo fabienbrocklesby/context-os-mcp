@@ -30,14 +30,35 @@ export async function queryMemoryIndex(
   namespaces: string[],
   filters: MemorySearchFilters & { limit?: number; candidateLimit?: number },
 ) {
+  return (await queryMemoryIndexWithDiagnostics(env, vector, namespaces, filters)).hits;
+}
+
+export async function queryMemoryIndexWithDiagnostics(
+  env: Env,
+  vector: number[],
+  namespaces: string[],
+  filters: MemorySearchFilters & { limit?: number; candidateLimit?: number; filtered?: boolean },
+) {
   const topK = Math.min(filters.candidateLimit ?? filters.limit ?? 8, 50);
+  const filter = filters.filtered === false ? undefined : buildFilter(filters);
+  const rejected: Record<string, number> = {};
+  const rawMatches: Array<{
+    id: string;
+    namespace?: string;
+    score: number;
+    metadata_keys: string[];
+    doc_id?: unknown;
+    project?: unknown;
+    memory_type?: unknown;
+    status?: unknown;
+  }> = [];
   const matches = await Promise.all(
     namespaces.map((namespace) =>
       env.MEMORY_INDEX.query(vector, {
         namespace,
         topK,
-        returnMetadata: "indexed",
-        filter: buildFilter(filters),
+        returnMetadata: "all",
+        filter,
       }),
     ),
   );
@@ -46,6 +67,16 @@ export async function queryMemoryIndex(
   for (const result of matches) {
     for (const match of result.matches) {
       const metadata = match.metadata as unknown as ChunkVectorMetadata | undefined;
+      rawMatches.push({
+        id: match.id,
+        namespace: match.namespace,
+        score: match.score,
+        metadata_keys: Object.keys((metadata ?? {}) as Record<string, unknown>).slice(0, 20),
+        doc_id: metadata?.doc_id,
+        project: metadata?.project,
+        memory_type: metadata?.memory_type,
+        status: metadata?.status,
+      });
       if (
         !metadata?.doc_id ||
         !metadata.snapshot_id ||
@@ -56,6 +87,7 @@ export async function queryMemoryIndex(
         !metadata.memory_type ||
         !metadata.status
       ) {
+        rejected.missing_required_metadata = (rejected.missing_required_metadata ?? 0) + 1;
         continue;
       }
       hits.push({
@@ -87,7 +119,19 @@ export async function queryMemoryIndex(
       });
     }
   }
-  return hits;
+  return {
+    hits,
+    diagnostics: {
+      top_k: topK,
+      metadata_return_mode: "all",
+      filter,
+      namespace_count: namespaces.length,
+      raw_match_count: rawMatches.length,
+      hydrated_hit_count: hits.length,
+      rejected_counts: rejected,
+      top_raw_matches: rawMatches.slice(0, 5),
+    },
+  };
 }
 
 export async function replaceDocumentVectors(

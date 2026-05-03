@@ -27,13 +27,14 @@ Context OS MCP is built to answer those questions before the assistant starts wo
 - Exposes a remote MCP server on Cloudflare Workers.
 - Supports OAuth-backed GitHub repo inspection and durable repo memory.
 - Adds a Context OS layer for visions, pillars, outcomes, initiatives, projects, milestones, assets, branch projects, entities, durable facts, tasks/reminders, source events, and links.
+- Plans environment-aware tool use so Claude, ChatGPT, Codex, generic MCP clients, and local CLI clients can use the tools available in their own host environment.
 
 ## Core Flow
 
 AI clients should start meaningful work with:
 
 ```text
-memory.prepare_assistant_session(project_or_topic, user_intent, active_sources?)
+memory.prepare_assistant_session(project_or_topic, user_intent, environment?, active_sources?, available_tools?)
 ```
 
 This remains backward-compatible and now includes a normalized `operating_brief` with:
@@ -48,16 +49,25 @@ This remains backward-compatible and now includes a normalized `operating_brief`
 - entities, facts, tasks, and source events
 - stale or missing context warnings
 - required live checks, including unavailable-tool warnings
+- environment-specific tool guidance for the current AI client
 - safe next actions and confirmation guardrails
 - write-back plan for durable memory
 
 For "How do I achieve X?", "What should I do next?", weekly/day planning, repo work, prioritization, and strategy decisions, use:
 
 ```text
-memory.plan_request(project_or_topic, user_intent, active_sources?, available_tools?)
+memory.plan_request(project_or_topic, user_intent, environment?, active_sources?, available_tools?)
 ```
 
 `plan_request` returns the same operating brief plus a request-specific plan with the objective, tool sequence, recommended scope, next actions, and write-back plan.
+
+Clients can also call:
+
+```text
+memory.plan_environment_tool_use(environment?, user_intent, project_or_topic?, available_tools?, active_sources?)
+```
+
+ContextOS does not try to own every connector directly. It resolves the project/topic, identifies the current AI environment, compares required capabilities with available host tools, then returns precise instructions for what the client should check itself, what ContextOS can check directly, what requires confirmation, and what should be written back durably.
 
 Example public-safe shape:
 
@@ -91,6 +101,12 @@ Example public-safe shape:
       "recommendations": [
         { "tool": "finish_work_session", "when": "After meaningful work." }
       ]
+    },
+    "environment_tool_guidance": {
+      "environment": { "slug": "codex" },
+      "client_must_execute": ["cloudflare_live"],
+      "contextos_can_execute": ["contextos_memory", "github_live"],
+      "unavailable_required_capabilities": []
     }
   }
 }
@@ -107,6 +123,10 @@ Memory is separated by project slug. Project-scoped retrieval searches that proj
 - `prepare_assistant_session`
 - `get_operational_context`
 - `plan_assistant_action`
+- `plan_environment_tool_use`
+- `list_client_environments`
+- `list_tool_capabilities`
+- `list_environment_capabilities`
 - `resolve_context`
 - `search_memory`
 - `list_initiatives`
@@ -133,6 +153,10 @@ Memory is separated by project slug. Project-scoped retrieval searches that proj
 - `github_search_code`
 - `github_get_file`
 - `github_save_file_memory`
+- `analyze_memory_migration`
+- `run_memory_migration`
+- `get_migration_audit`
+- `retrieval_diagnostics`
 
 ## Strategic World Model
 
@@ -184,4 +208,4 @@ Then fill in Cloudflare resource IDs, Zoho credentials, GitHub OAuth credentials
 - Additive D1 migrations preserve existing memory data.
 - Context OS v1 tools are deployed and smoke-tested.
 - Automated tests and TypeScript checks pass locally.
-- Known follow-up: semantic Vectorize retrieval can still fall back to keyword-only on broad conceptual queries; diagnostics now expose that clearly so it can be fixed instead of hidden.
+- Vectorize diagnostics expose provider metadata mode, filters, namespace behavior, raw/rejected hit counts, unfiltered fallback behavior, and D1 chunk counts for broad-query regression checks.

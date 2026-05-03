@@ -16,7 +16,12 @@ vi.mock("~/integrations/workers-ai/embeddings", () => ({
 }));
 
 vi.mock("~/integrations/vectorize/client", () => ({
-  queryMemoryIndex: (...args: unknown[]) => mocks.queryMemoryIndex(...args),
+  queryMemoryIndexWithDiagnostics: async (...args: unknown[]) => {
+    const value = await mocks.queryMemoryIndex(...args);
+    return Array.isArray(value)
+      ? { hits: value, diagnostics: { raw_match_count: value.length, hydrated_hit_count: value.length } }
+      : value;
+  },
   replaceDocumentVectors: vi.fn(),
   deleteVectors: vi.fn(),
 }));
@@ -225,6 +230,71 @@ describe("MemoryService searchMemory", () => {
         expect.objectContaining({ label: "projects", vector_hits: 0 }),
       ]),
     );
+  });
+
+  it("ranks exact project keyword fallback ahead of unrelated shared memory", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    mocks.queryMemoryIndex.mockResolvedValue([]);
+    mocks.searchDocumentsKeyword.mockResolvedValue([
+      makeDocument({
+        id: "shared-doc",
+        title: "Unrelated shared note",
+        project: "shared",
+        namespace: "shared",
+        memoryType: "current_context",
+      }),
+      makeDocument({
+        id: "project-decision",
+        title: "Assistant Context OS decision",
+        project: "memory-system-mcp",
+        namespace: "memory-system-mcp",
+        memoryType: "decision",
+      }),
+    ]);
+
+    const result = await service.searchMemory({
+      project: "memory-system-mcp",
+      query: "Assistant Context OS tool orchestration",
+      limit: 5,
+    });
+
+    expect(result.results[0]?.id).toBe("project-decision");
+  });
+
+  it("uses unfiltered vector fallback diagnostics when metadata-filtered search returns no hits", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    mocks.queryMemoryIndex
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([makeHit({ documentId: "doc-1", score: 0.77 })])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const result = await service.searchMemory({
+      project: "memory-system-mcp",
+      query: "ContextOS environment-aware tool use Claude ChatGPT Codex",
+      limit: 5,
+    });
+
+    expect(mocks.queryMemoryIndex).toHaveBeenCalledTimes(10);
+    expect(mocks.queryMemoryIndex).toHaveBeenLastCalledWith(
+      expect.anything(),
+      [0.5],
+      ["shared", "memory-system-mcp"],
+      expect.objectContaining({ filtered: false }),
+    );
+    expect(result.results[0]?.id).toBe("doc-1");
+    expect(result.diagnostics.vector_hits).toBe(1);
+    expect((result.diagnostics as { unfiltered_vector_provider?: unknown[] }).unfiltered_vector_provider).toHaveLength(5);
   });
 
   it("surfaces keyword-only classification through retrieval diagnostics", async () => {

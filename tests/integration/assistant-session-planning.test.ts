@@ -31,7 +31,12 @@ vi.mock("~/integrations/workers-ai/embeddings", () => ({
 }));
 
 vi.mock("~/integrations/vectorize/client", () => ({
-  queryMemoryIndex: (...args: unknown[]) => mocks.queryMemoryIndex(...args),
+  queryMemoryIndexWithDiagnostics: async (...args: unknown[]) => {
+    const value = await mocks.queryMemoryIndex(...args);
+    return Array.isArray(value)
+      ? { hits: value, diagnostics: { raw_match_count: value.length, hydrated_hit_count: value.length } }
+      : value;
+  },
   replaceDocumentVectors: vi.fn(),
   deleteVectors: vi.fn(),
 }));
@@ -208,6 +213,19 @@ describe("MemoryService assistant session reliability planning", () => {
         ]),
       },
     });
+    expect(result.environment_tool_guidance).toMatchObject({
+      environment: {
+        slug: "generic_mcp",
+      },
+      available_capabilities: expect.arrayContaining([
+        expect.objectContaining({ capability: "contextos_memory" }),
+      ]),
+    });
+    expect(result.operating_brief.environment_tool_guidance).toMatchObject({
+      write_back_policy: {
+        mode: "selective_durable_facts",
+      },
+    });
     expect(result.operating_brief.required_live_checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ tool: "get_operational_context", available: true }),
@@ -276,6 +294,11 @@ describe("MemoryService assistant session reliability planning", () => {
           expect.objectContaining({ tool: "finish_work_session" }),
         ]),
       },
+    });
+    expect(result.environment_tool_guidance).toMatchObject({
+      unavailable_required_capabilities: expect.arrayContaining([
+        expect.objectContaining({ capability: "github_live" }),
+      ]),
     });
   });
 });

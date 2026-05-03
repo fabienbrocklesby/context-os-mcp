@@ -4,14 +4,15 @@ Assistant Context OS is the orchestration layer on top of durable memory. It hel
 
 - What world, project, initiative, and strategy am I in?
 - What live sources must I check before making claims?
+- Which client environment am I in, and which tools can this client actually use?
 - What can I safely do now, and what should be deferred or confirmed?
 - What should be written back after the work?
 
 ## Standard Client Flow
 
-1. Start meaningful work with `prepare_assistant_session`.
+1. Start meaningful work with `prepare_assistant_session`, including `environment`, `available_tools`, and `active_sources` when the client knows them.
 2. For planning, prioritization, repo work, day/week plans, or "what should I do next?" requests, call `plan_request`.
-3. Follow `operating_brief.required_live_checks`.
+3. Follow `operating_brief.environment_tool_guidance` and `operating_brief.required_live_checks`.
 4. Answer or act only after required checks are complete, explicitly unavailable, or user-approved to skip.
 5. Close meaningful work with `finish_work_session` and structured writes when useful.
 
@@ -28,7 +29,17 @@ Every modern client should read `operating_brief`:
 - `required_live_checks`: concrete tool names, source kinds, availability, blocking status, and fallback behavior.
 - `risks`: strategy, missing-tool, privacy, stale-context, actionability, and confirmation risks.
 - `recommended_next_actions`: before-answer, before-action, before-write, safe-now, defer-until, and confirmation-needed steps.
+- `environment_tool_guidance`: resolved client environment, available/unavailable capabilities, client-vs-ContextOS checks, confirmation gates, fallback plan, and write-back policy.
 - `write_back_plan`: recommended durable memory writes and forbidden raw/private content.
+
+## Environment-Aware Tool Use
+
+ContextOS is a control plane, not a hard-coded adapter bus for every live system.
+
+- `plan_environment_tool_use` accepts `environment`, `user_intent`, `project_or_topic`, `available_tools`, `active_sources`, and optional `proposed_action`.
+- It returns which checks ContextOS can execute directly, which checks the AI client must execute with its own tools, what requires confirmation, what is unavailable, and how to write back safely.
+- `prepare_assistant_session` and `plan_request` embed the same guidance in `environment_tool_guidance`.
+- If a host lacks GitHub, CRM, email, calendar, Shopify, Cloudflare, terminal, or other live tools, the assistant must say what was not checked and reduce confidence.
 
 ## Fake Example
 
@@ -36,7 +47,8 @@ Every modern client should read `operating_brief`:
 {
   "project_or_topic": "example-project",
   "user_intent": "What should I do next in owner/example-repo this week?",
-  "available_tools": ["memory", "calendar"]
+  "environment": "codex",
+  "available_tools": ["Context OS Memory", "terminal", "calendar"]
 }
 ```
 
@@ -89,6 +101,17 @@ The response may include:
         "secrets or credentials",
         "raw private email bodies",
         "large raw diffs"
+      ]
+    },
+    "environment_tool_guidance": {
+      "environment": { "slug": "codex" },
+      "client_must_execute": ["github_live"],
+      "contextos_can_execute": ["contextos_memory"],
+      "unavailable_required_capabilities": [
+        {
+          "capability": "github_live",
+          "fallback": "Ask the client/user to check github, or proceed with a clear unverified-source warning."
+        }
       ]
     }
   }

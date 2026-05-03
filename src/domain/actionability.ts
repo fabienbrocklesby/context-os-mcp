@@ -1,6 +1,7 @@
 import { nextBusinessStartLabel, type TimeContext } from "~/domain/time-context";
 import type { RequestClassification } from "~/domain/request-classification";
 import type { ToolPlan } from "~/domain/tool-policy";
+import { isToolAvailable } from "~/domain/tool-availability";
 
 export type ActionabilityAssessment = {
   label:
@@ -110,6 +111,5 @@ function missingRequiredTools(toolPlan: ToolPlan, availableTools?: string[]) {
   if (!availableTools?.length) {
     return [];
   }
-  const available = new Set(availableTools);
-  return toolPlan.required_tools.filter((tool) => !available.has(tool.tool));
+  return toolPlan.required_tools.filter((tool) => !isToolAvailable(tool.tool, tool.tool, availableTools));
 }

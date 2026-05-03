@@ -42,6 +42,18 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     "other",
   ]);
   const sensitivitySchema = z.enum(["public", "internal", "confidential", "sensitive"]);
+  const savePolicySchema = z.enum(["durable_summary", "live_only", "requires_approval"]);
+  const capabilityAvailabilitySchema = z.enum(["available", "unavailable", "unknown", "user_configured"]);
+  const invocationStyleSchema = z.enum([
+    "mcp_tool",
+    "connector",
+    "chatgpt_app",
+    "terminal_command",
+    "local_file",
+    "api_call",
+    "manual_instruction",
+    "other",
+  ]);
   const milestoneStatusSchema = z.enum([
     "planned",
     "active",
@@ -178,6 +190,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       inputSchema: z.object({
         project_or_topic: z.string().optional(),
         user_intent: z.string().optional(),
+        environment: z.string().optional(),
         active_sources: z.array(z.string()).optional(),
         available_tools: z.array(z.string()).optional(),
         timezone: z.string().optional(),
@@ -192,6 +205,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     async ({
       project_or_topic,
       user_intent,
+      environment,
       active_sources,
       available_tools,
       timezone,
@@ -203,6 +217,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         await service.prepareAssistantSession({
           projectOrTopic: project_or_topic,
           userIntent: user_intent,
+          environment,
           activeSources: active_sources,
           availableTools: available_tools,
           timezone,
@@ -296,6 +311,217 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         await service.resolveContext({
           projectOrTopic: project_or_topic,
           userIntent: user_intent,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "list_client_environments",
+    {
+      description: "List known AI client environments such as Claude, ChatGPT, Codex, generic MCP, and local CLI.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () => textResult(await service.listClientEnvironments()),
+  );
+
+  server.registerTool(
+    "upsert_client_environment",
+    {
+      description: "Create or update an AI client environment manifest.",
+      inputSchema: z.object({
+        slug: z.string().min(1),
+        display_name: z.string().min(1),
+        description: z.string().nullable().optional(),
+        default_tool_style: z.string().nullable().optional(),
+        notes: z.string().nullable().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ slug, display_name, description, default_tool_style, notes }) =>
+      textResult(
+        await service.upsertClientEnvironment({
+          slug,
+          displayName: display_name,
+          description,
+          defaultToolStyle: default_tool_style,
+          notes,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "list_tool_capabilities",
+    {
+      description: "List ContextOS tool capability manifests and policies.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () => textResult(await service.listToolCapabilities()),
+  );
+
+  server.registerTool(
+    "upsert_tool_capability",
+    {
+      description: "Create or update a ContextOS tool capability manifest.",
+      inputSchema: z.object({
+        slug: z.string().min(1),
+        display_name: z.string().min(1),
+        source_kind: z.string().min(1),
+        action_kind: z.string().min(1),
+        source_of_truth: z.boolean().optional(),
+        volatile: z.boolean().optional(),
+        sensitivity: sensitivitySchema.optional(),
+        requires_confirmation: z.boolean().optional(),
+        destructive: z.boolean().optional(),
+        save_policy: savePolicySchema.optional(),
+        instructions_markdown: z.string().nullable().optional(),
+        input_hints_json: z.record(z.string(), z.unknown()).optional(),
+        output_hints_json: z.record(z.string(), z.unknown()).optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      slug,
+      display_name,
+      source_kind,
+      action_kind,
+      source_of_truth,
+      volatile,
+      sensitivity,
+      requires_confirmation,
+      destructive,
+      save_policy,
+      instructions_markdown,
+      input_hints_json,
+      output_hints_json,
+    }) =>
+      textResult(
+        await service.upsertToolCapability({
+          slug,
+          displayName: display_name,
+          sourceKind: source_kind,
+          actionKind: action_kind,
+          sourceOfTruth: source_of_truth,
+          volatile,
+          sensitivity,
+          requiresConfirmation: requires_confirmation,
+          destructive,
+          savePolicy: save_policy,
+          instructionsMarkdown: instructions_markdown,
+          inputHints: input_hints_json,
+          outputHints: output_hints_json,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "list_environment_capabilities",
+    {
+      description: "List capability availability/invocation manifests for an AI client environment.",
+      inputSchema: z.object({
+        environment: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ environment }) => textResult(await service.listEnvironmentCapabilities({ environment })),
+  );
+
+  server.registerTool(
+    "upsert_environment_capability",
+    {
+      description: "Create or update a capability binding for a client environment.",
+      inputSchema: z.object({
+        environment_slug: z.string().min(1),
+        capability_slug: z.string().min(1),
+        availability: capabilityAvailabilitySchema.optional(),
+        invocation_style: invocationStyleSchema.optional(),
+        tool_name: z.string().nullable().optional(),
+        usage_instructions_markdown: z.string().nullable().optional(),
+        limitations_markdown: z.string().nullable().optional(),
+        priority: z.number().int().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      environment_slug,
+      capability_slug,
+      availability,
+      invocation_style,
+      tool_name,
+      usage_instructions_markdown,
+      limitations_markdown,
+      priority,
+    }) =>
+      textResult(
+        await service.upsertEnvironmentCapability({
+          environmentSlug: environment_slug,
+          capabilitySlug: capability_slug,
+          availability,
+          invocationStyle: invocation_style,
+          toolName: tool_name,
+          usageInstructionsMarkdown: usage_instructions_markdown,
+          limitationsMarkdown: limitations_markdown,
+          priority,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "plan_environment_tool_use",
+    {
+      description:
+        "Plan environment-aware live checks and tool use for the current AI client without requiring every connector to be built into ContextOS.",
+      inputSchema: z.object({
+        environment: z.string().optional(),
+        user_intent: z.string().min(1),
+        project_or_topic: z.string().optional(),
+        available_tools: z.array(z.string()).optional(),
+        active_sources: z.array(z.string()).optional(),
+        proposed_action: z.string().optional(),
+        include_instructions: z.boolean().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      environment,
+      user_intent,
+      project_or_topic,
+      available_tools,
+      active_sources,
+      proposed_action,
+      include_instructions,
+    }) =>
+      textResult(
+        service.planEnvironmentToolUse({
+          environment,
+          userIntent: user_intent,
+          projectOrTopic: project_or_topic,
+          availableTools: available_tools,
+          activeSources: active_sources,
+          proposedAction: proposed_action,
+          includeInstructions: include_instructions,
         }),
       ),
   );
@@ -1309,6 +1535,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       inputSchema: z.object({
         project_or_topic: z.string().optional(),
         user_intent: z.string().min(1),
+        environment: z.string().optional(),
         active_sources: z.array(z.string()).optional(),
         available_tools: z.array(z.string()).optional(),
         timezone: z.string().optional(),
@@ -1326,6 +1553,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     async ({
       project_or_topic,
       user_intent,
+      environment,
       active_sources,
       available_tools,
       timezone,
@@ -1339,6 +1567,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         await service.planRequest({
           projectOrTopic: project_or_topic,
           userIntent: user_intent,
+          environment,
           activeSources: active_sources,
           availableTools: available_tools,
           timezone,
@@ -2012,6 +2241,60 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       },
     },
     async () => textResult(await service.adminStatus()),
+  );
+
+  server.registerTool(
+    "analyze_memory_migration",
+    {
+      description:
+        "Read-only analysis of duplicate projects, stale/placeholder context, supersession/link gaps, and vector indexing gaps. Never writes.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        include_markdown_links: z.boolean().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, include_markdown_links }) =>
+      textResult(await service.analyzeMemoryMigration({ project, includeMarkdownLinks: include_markdown_links })),
+  );
+
+  server.registerTool(
+    "run_memory_migration",
+    {
+      description:
+        "Run non-destructive memory migration. Defaults to dry-run; apply=true only writes metadata-safe aliases, canonical markers, links, and audit/source events.",
+      inputSchema: z.object({
+        dry_run: z.boolean().optional(),
+        apply: z.boolean().optional(),
+        project: z.string().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ dry_run, apply, project }) =>
+      textResult(await service.runMemoryMigration({ dryRun: dry_run, apply, project })),
+  );
+
+  server.registerTool(
+    "get_migration_audit",
+    {
+      description: "List migration audit events written by ContextOS migration/reconciliation tools.",
+      inputSchema: z.object({
+        migration_slug: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ migration_slug, limit }) =>
+      textResult(await service.getMigrationAudit({ migrationSlug: migration_slug, limit })),
   );
 
   server.registerTool(

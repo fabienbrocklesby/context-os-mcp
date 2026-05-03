@@ -57,7 +57,7 @@ describe("Vectorize client", () => {
       expect.objectContaining({
         namespace: "shared",
         topK: 5,
-        returnMetadata: "indexed",
+        returnMetadata: "all",
         filter: {
           memory_type: { $in: ["current_context"] },
           status: { $in: ["active"] },
