@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   getDocumentsByIds: vi.fn(),
   searchDocumentsKeyword: vi.fn(),
   getProjectStats: vi.fn(),
+  searchEntityAliases: vi.fn(),
+  searchEntities: vi.fn(),
+  listEntityStatesForEntities: vi.fn(),
 }));
 
 vi.mock("~/integrations/workers-ai/embeddings", () => ({
@@ -42,6 +45,18 @@ vi.mock("~/persistence/d1/repository", () => ({
 
     getProjectStats(project: string) {
       return mocks.getProjectStats(project);
+    }
+
+    searchEntityAliases(input: unknown) {
+      return mocks.searchEntityAliases(input);
+    }
+
+    searchEntities(input: unknown) {
+      return mocks.searchEntities(input);
+    }
+
+    listEntityStatesForEntities(input: unknown) {
+      return mocks.listEntityStatesForEntities(input);
     }
   },
 }));
@@ -142,6 +157,9 @@ describe("MemoryService searchMemory", () => {
     mocks.getDocumentsByIds.mockResolvedValue(new Map([["doc-1", makeDocument()]]));
     mocks.searchDocumentsKeyword.mockResolvedValue([]);
     mocks.getProjectStats.mockResolvedValue({ document_count: 1, chunk_count: 1 });
+    mocks.searchEntityAliases.mockResolvedValue([]);
+    mocks.searchEntities.mockResolvedValue([]);
+    mocks.listEntityStatesForEntities.mockResolvedValue([]);
   });
 
   it("queries semantic variants, widens candidate breadth, and deduplicates to the best vector score", async () => {
@@ -177,6 +195,7 @@ describe("MemoryService searchMemory", () => {
       expect.objectContaining({
         limit: 4,
         candidateLimit: 12,
+        activeOnly: true,
       }),
     );
     expect(result.results).toHaveLength(1);
@@ -320,5 +339,50 @@ describe("MemoryService searchMemory", () => {
     expect(result.likely_causes).toContain(
       "Keyword fallback is carrying this query; broad conceptual recall may be weak.",
     );
+  });
+
+  it("excludes inactive archived vector hits by default and allows them with includeSuperseded", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    mocks.queryMemoryIndex.mockResolvedValue([
+      makeHit({
+        documentId: "archived-doc",
+        vectorId: "archived-doc:0",
+        status: "archived",
+        active: false,
+        score: 0.9,
+      }),
+    ]);
+    mocks.getDocumentsByIds.mockResolvedValue(
+      new Map([
+        [
+          "archived-doc",
+          makeDocument({
+            id: "archived-doc",
+            status: "archived",
+            active: false,
+          }),
+        ],
+      ]),
+    );
+    mocks.getChunkContentsByVectorIds.mockResolvedValue(
+      new Map([["archived-doc:0", "Archived duplicate Light Lane context."]]),
+    );
+
+    const defaultResult = await service.searchMemory({
+      project: "memory-system-mcp",
+      query: "Light Lane duplicate context",
+      limit: 5,
+    });
+    expect(defaultResult.results).toHaveLength(0);
+
+    const includeResult = await service.searchMemory({
+      project: "memory-system-mcp",
+      query: "Light Lane duplicate context",
+      includeSuperseded: true,
+      limit: 5,
+    });
+    expect(includeResult.results[0]?.id).toBe("archived-doc");
   });
 });

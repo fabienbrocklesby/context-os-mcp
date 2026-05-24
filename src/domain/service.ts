@@ -1,6 +1,12 @@
 import { loadConfig } from "~/config/env";
+import YAML from "yaml";
+import {
+  analyzeAiBrainVaultPayload as analyzeAiBrainVaultPayloadV2,
+  buildAiBrainImportMarkdown as buildAiBrainImportMarkdownV2,
+} from "~/domain/ai-brain-vault";
 import { buildAssistantActionPlan } from "~/domain/assistant-planning";
 import { chunkMarkdown } from "~/domain/chunking";
+import { assessContextCompleteness } from "~/domain/context-completeness";
 import {
   defaultClientEnvironments,
   defaultEnvironmentCapabilities,
@@ -13,6 +19,8 @@ import {
   buildLogicalPath,
   buildMarkdownDocument,
   createSystemFrontmatter,
+  type EntityAlias,
+  type EntityState,
   inferMemoryTypeFromPath,
   isAdminPrincipal,
   type AssistantSearchScope,
@@ -30,12 +38,19 @@ import {
   type MemoryPrincipal,
   type MemorySearchFilters,
   type MemorySearchHit,
+  type ResolvedMemoryDocument,
   type SourceEvent,
   type StrategyAsset,
   type StrategyMilestone,
   type StrategyNode,
 } from "~/domain/memory";
 import { rerankSearchHits } from "~/domain/ranking";
+import {
+  applyDocumentDiversity,
+  buildRequiredContextPack,
+  inferTaskProfile,
+  type TaskProfile,
+} from "~/domain/retrieval-policy";
 import { isVisibleInProjectScope } from "~/domain/scope";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { embedTexts } from "~/integrations/workers-ai/embeddings";
@@ -169,8 +184,13 @@ export class MemoryService {
     };
   }
 
-  async listProjects() {
-    return { projects: await this.repo.listProjects() };
+  async listProjects(input: { includeMerged?: boolean; includeArchived?: boolean } = {}) {
+    return {
+      projects: await this.repo.listProjects({
+        includeMerged: input.includeMerged,
+        includeArchived: input.includeArchived,
+      }),
+    };
   }
 
   async getProject(input: { project: string }) {
@@ -541,6 +561,7 @@ export class MemoryService {
     scope?: AssistantSearchScope;
     initiative?: string;
     entityId?: string;
+    taskProfile?: TaskProfile;
   }) {
     const scope = input.scope ?? "project";
     if (scope === "project") {
@@ -577,11 +598,27 @@ export class MemoryService {
         return true;
       })
       .slice(0, input.limit ?? 8);
+    const currentTruths = projectResults
+      .map((result) => "current_truth" in result ? result.current_truth : null)
+      .filter(isPresent);
+    const taskProfile = input.taskProfile ?? inferTaskProfile(input.query);
+    const requiredContextPack = buildRequiredContextPack({
+      project: normalizedProject,
+      taskProfile,
+      userIntent: input.query,
+    });
+    const contextCompleteness = await this.assessContextCompletenessSafely(normalizedProject);
 
     return {
+      task_profile: taskProfile,
+      required_context_pack: requiredContextPack,
+      context_completeness: contextCompleteness,
+      repo_coverage: contextCompleteness.repo_coverage,
+      memory_quality_gates: contextCompleteness.memory_quality_gates,
       results,
       grouped: groupSearchResults(results),
       documents: projectResults.flatMap((result) => result.documents ?? []),
+      current_truth: mergeCurrentTruths(currentTruths, normalizedProject, input.query),
       diagnostics: {
         vector_hits: projectResults.reduce((sum, result) => sum + (result.diagnostics?.vector_hits ?? 0), 0),
         ranked_vector_hits: projectResults.reduce(
@@ -621,8 +658,34 @@ export class MemoryService {
     source?: string;
     tags?: string[];
     scope?: AssistantSearchScope;
+    taskProfile?: TaskProfile;
   }) {
     const normalizedProject = normalizeProject(input.project);
+    const taskProfile = input.taskProfile ?? inferTaskProfile(input.query);
+    const requiredContextPack = buildRequiredContextPack({
+      project: normalizedProject,
+      taskProfile,
+      userIntent: input.query,
+    });
+    const currentTruth = await this.resolveCurrentTruth({
+      project: normalizedProject,
+      query: input.query,
+      includeSuperseded: input.includeSuperseded,
+    }).catch((error) => ({
+      project: normalizedProject,
+      query: input.query,
+      guardrails: {
+        current_state_required: isCurrentStateQuery(input.query),
+        exact_entity_match: false,
+        semantic_memory_may_be_stale: isCurrentStateQuery(input.query),
+      },
+      matched_aliases: [],
+      entities: [],
+      warnings: [
+        `Current truth resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+      required_live_checks: isCurrentStateQuery(input.query) ? currentTruthLiveChecks(input.query) : [],
+    }));
     const namespaces =
       normalizedProject === "shared" ? ["shared"] : ["shared", normalizedProject];
     let hits: MemorySearchHit[] = [];
@@ -634,6 +697,7 @@ export class MemoryService {
     const vectorProviderDiagnostics: unknown[] = [];
     const unfilteredVectorDiagnostics: unknown[] = [];
     try {
+      const activeOnly = input.activeOnly ?? !input.includeSuperseded;
       const vectorResult = await withTimeout(
         (async () => {
           const embeddings = await embedTexts(
@@ -651,7 +715,7 @@ export class MemoryService {
                   includeSuperseded: input.includeSuperseded,
                   memoryTypes: input.memoryTypes,
                   statuses: input.statuses,
-                  activeOnly: input.activeOnly,
+                  activeOnly,
                   repo: input.repo,
                   path: input.path,
                   source: input.source,
@@ -738,12 +802,18 @@ export class MemoryService {
 
           return {
             hits: rawVectorHits,
-            ranked: rerankSearchHits(hydratedHits, {
-              includeSuperseded: input.includeSuperseded,
-              project: normalizedProject,
-              repo: input.repo,
-              path: input.path,
-            }).slice(0, input.limit ?? 8),
+            ranked: applyDocumentDiversity(
+              rerankSearchHits(hydratedHits, {
+                includeSuperseded: input.includeSuperseded,
+                project: normalizedProject,
+                repo: input.repo,
+                path: input.path,
+              }),
+              {
+                maxChunksPerDocument: 2,
+                limit: input.limit ?? 8,
+              },
+            ),
           };
         })(),
         8_000,
@@ -775,6 +845,8 @@ export class MemoryService {
       ? await hydrateTopDocuments(this.repo, this.zoho, ranked)
       : [];
 
+    const contextCompleteness = await this.assessContextCompletenessSafely(normalizedProject);
+    const currentTruthWarning = currentTruth.warnings[0];
     const results = ranked.map((hit) => ({
         id: hit.documentId,
         title: hit.title,
@@ -790,6 +862,10 @@ export class MemoryService {
         source: hit.source,
         tags: hit.tags,
         heading_path: hit.headingPath,
+        evidence_grade: documentEvidenceGrade(hit, currentTruth),
+        current_truth_warning: currentTruth.guardrails.current_state_required
+          ? currentTruthWarning
+          : undefined,
       })).concat(
         keywordResults.map((document) => ({
           id: document.id,
@@ -806,13 +882,23 @@ export class MemoryService {
           source: document.source ?? undefined,
           tags: document.tags,
           heading_path: "",
+          evidence_grade: "historical_document",
+          current_truth_warning: currentTruth.guardrails.current_state_required
+            ? currentTruthWarning
+            : undefined,
         })),
       );
 
     return {
+      task_profile: taskProfile,
+      required_context_pack: requiredContextPack,
+      context_completeness: contextCompleteness,
+      repo_coverage: contextCompleteness.repo_coverage,
+      memory_quality_gates: contextCompleteness.memory_quality_gates,
       results,
       grouped: groupSearchResults(results),
       documents,
+      current_truth: currentTruth,
       diagnostics: {
         vector_hits: hits.length,
         ranked_vector_hits: ranked.length,
@@ -825,19 +911,84 @@ export class MemoryService {
         d1_chunk_count_for_project: await this.repo.getProjectStats(normalizedProject).then((stats) => stats.chunk_count).catch(() => null),
         keyword_fallback_used: keywordResults.length > 0,
         keyword_fallback_due_to_empty_semantic: hits.length === 0 && keywordResults.length > 0,
+        current_truth: {
+          current_state_required: currentTruth.guardrails.current_state_required,
+          exact_entity_match: currentTruth.guardrails.exact_entity_match,
+          warnings: currentTruth.warnings,
+          required_live_checks: currentTruth.required_live_checks,
+        },
       },
     };
+  }
+
+  private async assessContextCompletenessSafely(input: {
+    project: string;
+    currentContextDocuments?: Array<{ title: string; path?: string | null; tags?: string[] | null }>;
+    repoFullNames?: string[];
+  } | string) {
+    const project = typeof input === "string" ? input : input.project;
+    const currentContextDocuments = typeof input === "string"
+      ? undefined
+      : input.currentContextDocuments;
+    const repoFullNames = typeof input === "string" ? undefined : input.repoFullNames;
+    const [documents, repos] = await Promise.all([
+      currentContextDocuments
+        ? Promise.resolve(currentContextDocuments)
+        : this.listCurrentContextDocumentsSafely(project),
+      repoFullNames ? Promise.resolve(repoFullNames) : this.listProjectRepoFullNamesSafely(project),
+    ]);
+    return assessContextCompleteness({
+      project,
+      currentContextDocuments: documents,
+      repoFullNames: repos,
+    });
+  }
+
+  private async listCurrentContextDocumentsSafely(project: string) {
+    try {
+      const listCurrentContextDocuments = (this.repo as MemoryRepository & {
+        listCurrentContextDocuments?: (project?: string) => Promise<ResolvedMemoryDocument[]>;
+      }).listCurrentContextDocuments;
+      if (typeof listCurrentContextDocuments !== "function") {
+        return [];
+      }
+      const documents = await listCurrentContextDocuments.call(this.repo, project);
+      return documents.map((document) => ({
+        title: document.title,
+        path: document.path,
+        tags: document.tags,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async listProjectRepoFullNamesSafely(project: string) {
+    try {
+      const listProjectGithubRepos = (this.repo as MemoryRepository & {
+        listProjectGithubRepos?: (project: string) => Promise<Array<{ repoFullName: string }>>;
+      }).listProjectGithubRepos;
+      if (typeof listProjectGithubRepos !== "function") {
+        return [];
+      }
+      const repos = await listProjectGithubRepos.call(this.repo, project);
+      return repos.map((repo) => repo.repoFullName);
+    } catch {
+      return [];
+    }
   }
 
   async prepareWorkSession(input: {
     project: string;
     topic?: string;
     authoritative?: boolean;
+    taskProfile?: TaskProfile;
   }) {
     const assistantSession = await this.prepareAssistantSession({
       projectOrTopic: input.project,
       userIntent: input.topic,
       authoritative: input.authoritative,
+      taskProfile: input.taskProfile,
     });
     const project = assistantSession.active_project.slug;
     return {
@@ -869,6 +1020,7 @@ export class MemoryService {
       business_days?: number[];
     };
     authoritative?: boolean;
+    taskProfile?: TaskProfile;
   }) {
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
@@ -876,6 +1028,12 @@ export class MemoryService {
     });
     const activeProject = resolution.active_project;
     const project = activeProject.slug;
+    const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
+    const requiredContextPack = buildRequiredContextPack({
+      project,
+      taskProfile,
+      userIntent: input.userIntent,
+    });
     await this.ensureProject({ project });
     const assistantActionPlan = this.planAssistantAction({
       userIntent: input.userIntent,
@@ -914,6 +1072,7 @@ export class MemoryService {
           limit: 12,
           authoritative: input.authoritative,
           scope: relatedProjectLinks.length ? "all_related" : "project",
+          taskProfile,
         })
       : { results: [], grouped: {}, documents: [], diagnostics: null };
 
@@ -926,7 +1085,19 @@ export class MemoryService {
       userIntent: input.userIntent,
       limit: 8,
     });
+    const currentTruth = "current_truth" in groupedMemory ? groupedMemory.current_truth : null;
     const retrievalMode = classifyRetrievalMode(groupedMemory);
+    const contextCompleteness = await this.assessContextCompletenessSafely({
+      project,
+      currentContextDocuments: "items" in currentContext
+        ? currentContext.items.map((item) => ({
+            title: item.document.title,
+            path: item.document.path,
+            tags: item.document.tags,
+          }))
+        : [],
+      repoFullNames: projectStatus.github_repos?.map((repo) => repo.repoFullName) ?? [],
+    });
     const warnings = buildContextWarnings({
       projectStatus,
       groupedMemory,
@@ -934,11 +1105,14 @@ export class MemoryService {
       entities,
       initiatives,
       activeSources: input.activeSources,
-    });
+    })
+      .concat(project === "light-lane" ? contextCompleteness.warnings : [])
+      .concat(currentTruth?.warnings ?? []);
     const contextHealth = {
       retrieval_mode: retrievalMode,
       warnings,
       project_health: projectStatus.health,
+      context_completeness: contextCompleteness,
     };
     const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
     const environmentToolGuidance = this.planEnvironmentToolUse({
@@ -979,6 +1153,11 @@ export class MemoryService {
     });
 
     return {
+      task_profile: taskProfile,
+      required_context_pack: requiredContextPack,
+      context_completeness: contextCompleteness,
+      repo_coverage: contextCompleteness.repo_coverage,
+      memory_quality_gates: contextCompleteness.memory_quality_gates,
       context_resolution: resolution,
       active_project: activeProject,
       related_projects: relatedProjects,
@@ -986,6 +1165,7 @@ export class MemoryService {
       strategy_context: strategyContext.strategy_context,
       current_context: currentContext,
       grouped_memory: groupedMemory,
+      current_truth: currentTruth,
       entities,
       tasks,
       source_events: sourceEvents,
@@ -1001,6 +1181,7 @@ export class MemoryService {
         tasks,
         sourceEvents,
         warnings,
+        currentTruthChecks: currentTruth?.required_live_checks,
       }),
       write_back_policy: writeBackPolicy,
     };
@@ -1315,6 +1496,155 @@ export class MemoryService {
     return { project, facts: extracted, saved };
   }
 
+  async upsertEntityState(input: {
+    project?: string;
+    entityId?: string;
+    entityType?: EntityType;
+    entityName?: string;
+    entitySlug?: string;
+    entitySummary?: string | null;
+    aliases?: string[];
+    stateKey: string;
+    value: unknown;
+    confidence?: number | null;
+    source?: string | null;
+    sourceId?: string | null;
+    sourceEventId?: string | null;
+    validFrom?: string | null;
+    validUntil?: string | null;
+    observedAt?: string | null;
+    status?: EntityState["status"];
+  }) {
+    const project = normalizeProject(input.project);
+    await this.ensureProject({ project });
+    let entity = input.entityId ? await this.repo.getEntity(input.entityId) : null;
+    if (!entity) {
+      if (!input.entityName) {
+        throw new Error("entity_name is required when entity_id is not provided.");
+      }
+      entity = await this.repo.upsertEntity({
+        project,
+        type: input.entityType ?? "other",
+        slug: input.entitySlug ? slugify(input.entitySlug) : slugify(input.entityName),
+        name: input.entityName,
+        summary: input.entitySummary,
+        source: input.source,
+        sourceId: input.sourceId,
+        confidence: input.confidence,
+      });
+    }
+    if (!entity) {
+      throw new Error("Unable to resolve or create entity for state write.");
+    }
+    const aliases = await this.repo.upsertEntityAliases({
+      project,
+      entityId: entity.id,
+      aliases: [entity.name, ...(input.aliases ?? [])],
+      source: input.source ?? "manual",
+      confidence: input.confidence ?? entity.confidence,
+    });
+    const state = await this.repo.upsertEntityState({
+      project,
+      entityId: entity.id,
+      stateKey: normalizeStateKey(input.stateKey),
+      value: input.value,
+      confidence: input.confidence,
+      source: input.source,
+      sourceId: input.sourceId,
+      sourceEventId: input.sourceEventId,
+      validFrom: input.validFrom,
+      validUntil: input.validUntil,
+      observedAt: input.observedAt,
+      status: input.status,
+    });
+    return { project, entity, aliases, state };
+  }
+
+  async getEntityCurrentState(input: {
+    project?: string;
+    entityId?: string;
+    query?: string;
+    includeSuperseded?: boolean;
+  }) {
+    const project = normalizeProject(input.project);
+    const entities = input.entityId
+      ? [await this.repo.getEntity(input.entityId)].filter(isPresent)
+      : await this.resolveCurrentTruthEntities(project, input.query ?? "");
+    const states = await this.repo.listEntityStatesForEntities({
+      project,
+      entityIds: entities.map((entity) => entity.id),
+      includeSuperseded: input.includeSuperseded,
+    });
+    const primary = entities[0] ?? null;
+    return {
+      project,
+      entity: primary,
+      entities: entities.map((entity) => ({
+        entity,
+        states: statesByKey(states.filter((state) => state.entityId === entity.id)),
+      })),
+      states: primary ? statesByKey(states.filter((state) => state.entityId === primary.id)) : {},
+    };
+  }
+
+  async resolveCurrentTruth(input: {
+    project?: string;
+    query: string;
+    includeSuperseded?: boolean;
+    limit?: number;
+  }) {
+    const project = normalizeProject(input.project);
+    const currentStateRequired = isCurrentStateQuery(input.query);
+    const aliasMatches = await this.repo.searchEntityAliases({
+      project,
+      query: input.query,
+      limit: input.limit ?? 12,
+    });
+    const entities = dedupeEntities([
+      ...aliasMatches.map((alias) => alias.entity).filter(isPresent),
+      ...(aliasMatches.length
+        ? []
+        : await this.repo.searchEntities({ project, query: input.query, limit: input.limit ?? 12 })),
+    ]);
+    const states = await this.repo.listEntityStatesForEntities({
+      project,
+      entityIds: entities.map((entity) => entity.id),
+      includeSuperseded: input.includeSuperseded,
+    });
+    const entityPayloads = entities.map((entity) => {
+      const entityStates = states.filter((state) => state.entityId === entity.id);
+      return {
+        entity,
+        matched_aliases: aliasMatches.filter((alias) => alias.entityId === entity.id),
+        evidence_grade: entityStates.some((state) => state.status === "active")
+          ? "current_structured"
+          : "unknown",
+        states: statesByKey(entityStates),
+      };
+    });
+    const warnings = buildCurrentTruthWarnings({
+      query: input.query,
+      currentStateRequired,
+      entities,
+      states,
+    });
+    return {
+      project,
+      query: input.query,
+      guardrails: {
+        current_state_required: currentStateRequired,
+        exact_entity_match: aliasMatches.length > 0,
+        semantic_memory_may_be_stale: currentStateRequired,
+      },
+      matched_aliases: aliasMatches,
+      entities: entityPayloads,
+      warnings,
+      required_live_checks: currentStateRequired && (warnings.length > 0 || entityPayloads.length === 0)
+        ? currentTruthLiveChecks(input.query)
+        : [],
+    };
+  }
+
   async linkMemory(input: {
     project?: string;
     fromType: string;
@@ -1361,20 +1691,28 @@ export class MemoryService {
       : null;
     const initiatives = await this.repo.listInitiatives({ project, status: "active", limit: 10 });
     const tasks = await this.repo.listTasks({ project, dueBefore: daysFromNowIso(7), limit: 20 });
+    const contextCompleteness = await this.assessContextCompletenessSafely({
+      project,
+      repoFullNames: status.github_repos?.map((repo) => repo.repoFullName) ?? [],
+    });
+    const warnings = buildContextWarnings({
+      projectStatus: status,
+      groupedMemory: diagnostics,
+      retrievalMode: diagnostics ? classifyRetrievalMode(diagnostics) : "not_checked",
+      entities: await this.repo.searchEntities({ project, limit: 5 }),
+      initiatives,
+      activeSources: [],
+    }).concat(project === "light-lane" ? contextCompleteness.warnings : []);
     return {
       project,
       status,
       initiatives,
       upcoming_tasks: tasks,
       retrieval: diagnostics,
-      warnings: buildContextWarnings({
-        projectStatus: status,
-        groupedMemory: diagnostics,
-        retrievalMode: diagnostics ? classifyRetrievalMode(diagnostics) : "not_checked",
-        entities: await this.repo.searchEntities({ project, limit: 5 }),
-        initiatives,
-        activeSources: [],
-      }),
+      context_completeness: contextCompleteness,
+      repo_coverage: contextCompleteness.repo_coverage,
+      memory_quality_gates: contextCompleteness.memory_quality_gates,
+      warnings,
     };
   }
 
@@ -1779,12 +2117,19 @@ export class MemoryService {
     includeMemory?: boolean;
     includeAssets?: boolean;
     includeActiveTasks?: boolean;
+    taskProfile?: TaskProfile;
   }) {
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
       userIntent: input.userIntent,
     });
     const project = resolution.active_project.slug;
+    const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
+    const requiredContextPack = buildRequiredContextPack({
+      project,
+      taskProfile,
+      userIntent: input.userIntent,
+    });
     const actionPlan = this.planAssistantAction({
       userIntent: input.userIntent,
       activeSources: input.activeSources,
@@ -1798,7 +2143,7 @@ export class MemoryService {
       this.getStrategyContext({ projectOrTopic: project, userIntent: input.userIntent }),
       input.includeMemory === false
         ? Promise.resolve(null)
-        : this.searchMemory({ project, query: input.userIntent, limit: 8, scope: "project" }),
+        : this.searchMemory({ project, query: input.userIntent, limit: 8, scope: "project", taskProfile }),
       input.includeActiveTasks === false
         ? Promise.resolve([])
         : this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
@@ -1817,6 +2162,7 @@ export class MemoryService {
       save: false,
     });
     const retrievalMode = memory ? classifyRetrievalMode(memory) : "not_requested";
+    const contextCompleteness = await this.assessContextCompletenessSafely(project);
     const contextWarnings = buildContextWarnings({
       projectStatus,
       groupedMemory: memory,
@@ -1824,11 +2170,12 @@ export class MemoryService {
       entities: [],
       initiatives: strategy.strategy_context.initiatives,
       activeSources: input.activeSources,
-    });
+    }).concat(project === "light-lane" ? contextCompleteness.warnings : []);
     const contextHealth = {
       retrieval_mode: retrievalMode,
       warnings: contextWarnings,
       project_health: projectStatus.health,
+      context_completeness: contextCompleteness,
     };
     const writeBackPolicy = selectiveWriteBackPolicy(input.activeSources);
     const environmentToolGuidance = this.planEnvironmentToolUse({
@@ -1861,6 +2208,11 @@ export class MemoryService {
       environmentToolGuidance,
     });
     return {
+      task_profile: taskProfile,
+      required_context_pack: requiredContextPack,
+      context_completeness: contextCompleteness,
+      repo_coverage: contextCompleteness.repo_coverage,
+      memory_quality_gates: contextCompleteness.memory_quality_gates,
       context_resolution: resolution,
       operational_context: actionPlan.operational_context,
       request_classification: actionPlan.request_classification,
@@ -2600,7 +2952,7 @@ export class MemoryService {
 
   async analyzeMemoryMigration(input: { project?: string; includeMarkdownLinks?: boolean } = {}) {
     const [projects, aliases, documents] = await Promise.all([
-      this.repo.listProjects(),
+      this.repo.listProjects({ includeMerged: true, includeArchived: true }),
       this.repo.listProjectAliases().catch(() => []),
       this.repo.listAllDocuments({ project: input.project, limit: 5000 }).catch(() => []),
     ]);
@@ -2773,6 +3125,728 @@ export class MemoryService {
     return { events: await this.repo.listMigrationAuditEvents(input) };
   }
 
+  async analyzeContextTruthMigration(input: { project?: string } = {}) {
+    const project = normalizeProject(input.project);
+    const [documents, entities, aliases, facts] = await Promise.all([
+      this.repo.listAllDocuments({ project, limit: 5000 }).catch(() => []),
+      this.repo.searchEntities({ project, limit: 100 }).catch(() => []),
+      this.repo.listEntityAliases({ project, limit: 500 }).catch(() => []),
+      this.repo.listFacts({ project, limit: 100 }).catch(() => []),
+    ]);
+    const candidateCurrentDocs = documents.filter((document) =>
+      document.active &&
+      ["current_context", "decision"].includes(document.memoryType),
+    );
+    const currentSensitiveDocs = candidateCurrentDocs.filter((document) =>
+      /\b(current|latest|status|stage|pipeline|deal|opportunit|next action|blocker|left|joined)\b/i.test(
+        `${document.title} ${document.path} ${document.tags.join(" ")}`,
+      ),
+    );
+    const counts = {
+      documents_scanned: documents.length,
+      current_sensitive_documents: currentSensitiveDocs.length,
+      entities_seen: entities.length,
+      aliases_seen: aliases.length,
+      facts_seen: facts.length,
+    };
+    return {
+      migration_slug: "context-truth-engine",
+      dry_run: true,
+      project,
+      counts,
+      proposed_actions: [
+        {
+          type: "entity_alias_backfill",
+          count: entities.length,
+          safe_to_apply: true,
+          description: "Create aliases from existing entity names and slugs.",
+        },
+        {
+          type: "manual_current_state_review",
+          count: currentSensitiveDocs.length,
+          safe_to_apply: false,
+          description: "Review volatile current-state docs before converting them into active entity states.",
+        },
+      ],
+      safety: {
+        deletes_workdrive_files: false,
+        deletes_d1_rows: false,
+        resets_vectorize: false,
+        raw_private_data_policy: "durable summaries and structured state only",
+      },
+    };
+  }
+
+  async runContextTruthMigration(input: { project?: string; dryRun?: boolean; apply?: boolean } = {}) {
+    const apply = input.apply === true;
+    const dryRun = input.dryRun !== false || !apply;
+    const analysis = await this.analyzeContextTruthMigration({ project: input.project });
+    const manifestId = `context-truth-engine-${analysis.project}`;
+    if (dryRun) {
+      await this.repo.recordContextTruthMigrationManifest({
+        id: manifestId,
+        migrationSlug: analysis.migration_slug,
+        project: analysis.project,
+        dryRun: true,
+        applyRequested: false,
+        status: "dry_run",
+        summary: `Dry run scanned ${analysis.counts.documents_scanned} documents and found ${analysis.counts.current_sensitive_documents} current-sensitive review candidates.`,
+        manifest: analysis,
+        counts: analysis.counts,
+      }).catch(() => undefined);
+      await this.repo.recordMigrationAuditEvent({
+        migrationSlug: analysis.migration_slug,
+        phase: "dry_run",
+        dryRun: true,
+        status: "ok",
+        summary: "Created Context Truth Engine dry-run manifest.",
+        counts: analysis.counts,
+      }).catch(() => undefined);
+      return { dry_run: true, applied: false, manifest_id: manifestId, analysis };
+    }
+
+    const entities = await this.repo.searchEntities({ project: analysis.project, limit: 100 });
+    let aliasesWritten = 0;
+    for (const entity of entities) {
+      const aliases = await this.repo.upsertEntityAliases({
+        project: analysis.project,
+        entityId: entity.id,
+        aliases: [entity.name, entity.slug],
+        source: "context-truth-engine-migration",
+        confidence: entity.confidence ?? 0.7,
+      });
+      aliasesWritten += aliases.length;
+    }
+    const counts = {
+      ...analysis.counts,
+      aliases_written: aliasesWritten,
+    };
+    await this.repo.recordContextTruthMigrationManifest({
+      id: manifestId,
+      migrationSlug: analysis.migration_slug,
+      project: analysis.project,
+      dryRun: false,
+      applyRequested: true,
+      status: "applied",
+      summary: `Applied non-destructive Context Truth Engine migration metadata and wrote ${aliasesWritten} aliases.`,
+      manifest: analysis,
+      counts,
+    });
+    await this.repo.recordMigrationAuditEvent({
+      migrationSlug: analysis.migration_slug,
+      phase: "apply",
+      dryRun: false,
+      status: "ok",
+      summary: `Applied Context Truth Engine metadata migration: ${aliasesWritten} aliases written.`,
+      counts,
+    }).catch(() => undefined);
+    await this.repo.saveSourceEvent({
+      project: "memory-system-mcp",
+      source: "migration",
+      sourceId: `${analysis.migration_slug}:apply:${manifestId}`,
+      eventType: "context_truth_engine",
+      title: "Applied Context Truth Engine metadata migration",
+      summary: "Backfilled entity aliases from existing entities and recorded a non-destructive migration manifest. Volatile deal/person states still require approved structured state writes.",
+      sensitivity: "internal",
+      savePolicy: "durable_summary",
+      metadata: counts,
+    }).catch(() => undefined);
+    return { dry_run: false, applied: true, manifest_id: manifestId, counts, analysis };
+  }
+
+  async importAiBrainVault(input: {
+    project?: string;
+    vaultName?: string;
+    files: Array<{ path: string; markdown: string }>;
+    manifest?: Record<string, unknown>;
+    retrievalMap?: Record<string, unknown>;
+    dryRun?: boolean;
+    apply?: boolean;
+    preserveWikilinks?: boolean;
+    applyLinks?: boolean;
+    currentContextPriorities?: string[];
+    authorClient?: string;
+  }) {
+    const project = normalizeProject(input.project);
+    const apply = input.apply === true;
+    const dryRun = input.dryRun !== false || !apply;
+    const analysis = analyzeAiBrainVaultPayloadV2({
+      project,
+      vaultName: input.vaultName ?? "AI Brain Vault",
+      files: input.files,
+      manifest: input.manifest,
+      retrievalMap: input.retrievalMap,
+      preserveWikilinks: input.preserveWikilinks,
+      applyLinks: input.applyLinks,
+      currentContextPriorities: input.currentContextPriorities,
+    });
+    const manifestId = `ai-brain-vault-import-${project}`;
+    if (dryRun) {
+      await this.repo.recordContextTruthMigrationManifest({
+        id: manifestId,
+        migrationSlug: "ai-brain-vault-import",
+        project,
+        dryRun: true,
+        applyRequested: false,
+        status: "dry_run",
+        summary: `Dry run prepared ${analysis.counts.files_seen} AI Brain vault files for import.`,
+        manifest: analysis,
+        counts: analysis.counts,
+      }).catch(() => undefined);
+      return {
+        dry_run: true,
+        applied: false,
+        manifest_id: manifestId,
+        links_written: 0,
+        unresolved_links: analysis.unresolved_links,
+        current_context_written: 0,
+        snippets_written: 0,
+        documents_by_stable_id: analysis.documents_by_stable_id,
+        analysis,
+      };
+    }
+
+    const imported = [];
+    let currentContextWritten = 0;
+    let snippetsWritten = 0;
+    for (const proposal of analysis.proposed_documents) {
+      const markdown = buildAiBrainImportMarkdownV2({
+        proposal,
+        vaultName: analysis.vault_name,
+        project,
+        authorClient: input.authorClient ?? this.principal.login,
+      });
+      if (proposal.memory_type === "current_context") {
+        currentContextWritten += 1;
+        imported.push(
+          await this.updateContextDocument({
+            project,
+            path: buildLogicalPath(project, ["context", "current"], `${slugify(proposal.title)}.md`),
+            title: proposal.title,
+            markdown,
+            authorClient: input.authorClient ?? this.principal.login,
+          }),
+        );
+      } else {
+        snippetsWritten += 1;
+        imported.push(
+          await this.saveSnippet({
+            project,
+            title: proposal.title,
+            markdown,
+            tags: [...proposal.tags],
+            source: "ai-brain-vault",
+            path: proposal.source_path,
+            confidence: 0.8,
+            usefulness: proposal.priority === "load-first" ? 1 : 0.85,
+            authorClient: input.authorClient ?? this.principal.login,
+          }),
+        );
+      }
+    }
+    let linksWritten = 0;
+    if (input.applyLinks !== false) {
+      for (const link of analysis.proposed_links) {
+        await this.repo.linkMemory({
+          project,
+          fromType: "ai_brain_document",
+          fromId: link.from_stable_id,
+          toType: "ai_brain_document",
+          toId: link.to_stable_id,
+          relation: "wikilink",
+          weight: 1,
+          metadata: {
+            vault_name: analysis.vault_name,
+            source_path: link.from_path,
+            target_path: link.to_path,
+            target_label: link.target_label,
+          },
+        });
+        linksWritten += 1;
+      }
+    }
+    await this.repo.recordContextTruthMigrationManifest({
+      id: manifestId,
+      migrationSlug: "ai-brain-vault-import",
+      project,
+      dryRun: false,
+      applyRequested: true,
+      status: "applied",
+      summary: `Imported ${imported.length} AI Brain vault files and wrote ${linksWritten} wiki-link relationships without deleting existing memory.`,
+      manifest: analysis,
+      counts: { ...analysis.counts, imported: imported.length, links_written: linksWritten },
+    });
+    return {
+      dry_run: false,
+      applied: true,
+      manifest_id: manifestId,
+      links_written: linksWritten,
+      unresolved_links: analysis.unresolved_links,
+      current_context_written: currentContextWritten,
+      snippets_written: snippetsWritten,
+      documents_by_stable_id: analysis.documents_by_stable_id,
+      imported,
+      analysis,
+    };
+  }
+
+  async analyzeWorkdriveCanonicalization(input: {
+    canonicalProject?: string;
+    duplicateProject?: string;
+    includeSharedDuplicates?: boolean;
+  } = {}) {
+    const canonicalProject = normalizeProject(input.canonicalProject ?? "light-lane");
+    const duplicateProject = normalizeProject(input.duplicateProject ?? "lightlane");
+    const includeSharedDuplicates = input.includeSharedDuplicates !== false;
+    const [projects, documents, aliases] = await Promise.all([
+      this.repo.listProjects({ includeMerged: true, includeArchived: true }),
+      this.repo.listAllDocuments({ limit: 5000 }),
+      this.repo.listProjectAliases().catch(() => []),
+    ]);
+    const canonical = projects.find((project) => project.slug === canonicalProject) ?? null;
+    const duplicate = projects.find((project) => project.slug === duplicateProject) ?? null;
+    const duplicateDocuments = documents
+      .filter((document) => document.project === duplicateProject)
+      .filter((document) => document.active && document.status !== "archived");
+    const sharedDuplicateDocuments = includeSharedDuplicates
+      ? documents.filter(isSharedLightLaneCurrentContextDuplicate)
+      : [];
+    const archiveCopies = duplicateDocuments.map((document) => ({
+      document_id: document.id,
+      workdrive_file_id: document.workdriveFileId,
+      title: document.title,
+      from_path: document.path,
+      to_path: archivePathForMergedProjectDocument(document, canonicalProject, duplicateProject),
+      action: "copy_to_canonical_archive_then_mark_original_archived",
+    }));
+    const sharedArchiveCopies = sharedDuplicateDocuments.map((document) => ({
+      document_id: document.id,
+      workdrive_file_id: document.workdriveFileId,
+      title: document.title,
+      from_path: document.path,
+      to_path: sharedHistoryArchivePath(document, canonicalProject),
+      action: "copy_to_shared_history_then_mark_original_archived",
+    }));
+    const redirectFiles = duplicate?.workdriveRootFolderId
+      ? [
+          {
+            folder_id: duplicate.workdriveRootFolderId,
+            path: `/memory/projects/${duplicateProject}/MERGED_INTO_${canonicalProject}.md`,
+            file_name: `MERGED_INTO_${canonicalProject}.md`,
+            action: "upsert_redirect_marker",
+          },
+          {
+            folder_id: duplicate.workdriveRootFolderId,
+            path: `/memory/projects/${duplicateProject}/README.md`,
+            file_name: "README.md",
+            action: "upsert_redirect_readme",
+          },
+        ]
+      : [];
+    const canonicalCurrentContext = documents
+      .filter((document) => document.project === canonicalProject)
+      .filter((document) => document.memoryType === "current_context")
+      .filter((document) => document.active && document.canonical)
+      .sort((left, right) => right.revision - left.revision || right.path.localeCompare(left.path))
+      .slice(0, 5)
+      .map((document) => ({
+        document_id: document.id,
+        title: document.title,
+        path: document.path,
+        revision: document.revision,
+      }));
+    const memoryLinks = [
+      {
+        project: canonicalProject,
+        from_type: "project",
+        from_id: duplicateProject,
+        to_type: "project",
+        to_id: canonicalProject,
+        relation: "merged_into",
+      },
+      ...archiveCopies.map((copy) => ({
+        project: canonicalProject,
+        from_type: "document",
+        from_id: copy.document_id,
+        to_type: "path",
+        to_id: copy.to_path,
+        relation: "archived_as",
+      })),
+      ...sharedArchiveCopies.map((copy) => ({
+        project: canonicalProject,
+        from_type: "document",
+        from_id: copy.document_id,
+        to_type: "path",
+        to_id: copy.to_path,
+        relation: "archived_as",
+      })),
+    ];
+    const wikiLinks = [
+      "[[light-lane]]",
+      "[[memory-system-mcp]]",
+      "[[Assistant Context OS]]",
+      "[[Fully Promoted Nelson]]",
+      "[[Fivestar Print]]",
+    ];
+    const counts = {
+      duplicate_project_documents: archiveCopies.length,
+      shared_duplicate_documents: sharedArchiveCopies.length,
+      redirect_files: redirectFiles.length,
+      memory_links: memoryLinks.length,
+      canonical_current_context_candidates: canonicalCurrentContext.length,
+    };
+    const manifest = {
+      migration_slug: "workdrive-visible-canonicalization",
+      canonical_project: canonicalProject,
+      duplicate_project: duplicateProject,
+      strategy: "copy_archive_and_redirect",
+      generated_at: new Date().toISOString(),
+      folders: {
+        canonical_project_root_id: canonical?.workdriveRootFolderId ?? null,
+        duplicate_project_root_id: duplicate?.workdriveRootFolderId ?? null,
+        canonical_archive_path: `/memory/projects/${canonicalProject}/_merged/${duplicateProject}/`,
+      },
+      project_state: {
+        canonical,
+        duplicate,
+        aliases: aliases.filter((alias) => alias.alias === duplicateProject || alias.projectSlug === canonicalProject),
+        proposed_duplicate_status: "archived",
+        proposed_duplicate_canonical_status: "merged",
+      },
+      canonical_current_context: canonicalCurrentContext,
+      archive_copies: archiveCopies,
+      shared_archive_copies: sharedArchiveCopies,
+      redirect_files: redirectFiles,
+      d1_updates: [
+        {
+          table: "projects",
+          key: duplicateProject,
+          changes: {
+            status: "archived",
+            canonical_status: "merged",
+            canonical_project: canonicalProject,
+            merged_into_project: canonicalProject,
+          },
+        },
+        {
+          table: "documents",
+          count: archiveCopies.length + sharedArchiveCopies.length,
+          changes: {
+            status: "archived",
+            active: false,
+            canonical: false,
+            archived_to_path: "per manifest archive copy",
+          },
+        },
+      ],
+      reindex: {
+        archive_copies: archiveCopies.map((copy) => copy.to_path),
+        shared_archive_copies: sharedArchiveCopies.map((copy) => copy.to_path),
+        original_documents_metadata_refresh: [...archiveCopies, ...sharedArchiveCopies].map((copy) => copy.document_id),
+      },
+      memory_links: memoryLinks,
+      markdown_wiki_links: wikiLinks,
+      risks: [
+        "This conservative phase does not delete WorkDrive files.",
+        "Folder moves are not attempted because this tenant API path is not validated in the current client.",
+        "The old lightlane folder receives redirect files; any remaining raw files are marked archived in D1 and their vector metadata is refreshed inactive.",
+      ],
+      rollback_plan: [
+        "Use migration audit/manifest id to find changed D1 rows.",
+        "Set affected document rows active/canonical/status back from the previous D1 backup if needed.",
+        "Archive copies and redirect files can remain as preserved history; no original files are deleted.",
+        "Re-run document reindex for affected original WorkDrive file IDs if a rollback is approved.",
+      ],
+      safety: {
+        deletes_workdrive_files: false,
+        deletes_d1_rows: false,
+        drops_vectorize_without_replacement: false,
+        copies_raw_markdown_only_within_canonical_workdrive_store: true,
+      },
+      counts,
+    };
+    return {
+      dry_run: true,
+      manifest,
+    };
+  }
+
+  async runWorkdriveCanonicalization(input: {
+    canonicalProject?: string;
+    duplicateProject?: string;
+    dryRun?: boolean;
+    apply?: boolean;
+    includeSharedDuplicates?: boolean;
+  } = {}) {
+    const apply = input.apply === true;
+    const dryRun = input.dryRun !== false || !apply;
+    const analysis = await this.analyzeWorkdriveCanonicalization(input);
+    const manifest = analysis.manifest;
+    const manifestId = workdriveCanonicalizationManifestId(
+      manifest.canonical_project,
+      manifest.duplicate_project,
+    );
+    if (dryRun) {
+      await this.repo.recordWorkdriveCanonicalizationManifest({
+        id: manifestId,
+        migrationSlug: manifest.migration_slug,
+        canonicalProject: manifest.canonical_project,
+        duplicateProject: manifest.duplicate_project,
+        dryRun: true,
+        applyRequested: false,
+        status: "dry_run",
+        summary: `Dry-run manifest proposes ${manifest.counts.duplicate_project_documents} duplicate project archive copies, ${manifest.counts.shared_duplicate_documents} shared duplicate archive copies, and ${manifest.counts.redirect_files} redirect files.`,
+        manifest: manifest as Record<string, unknown>,
+        counts: manifest.counts,
+      });
+      await this.repo.recordMigrationAuditEvent({
+        migrationSlug: manifest.migration_slug,
+        phase: "dry_run",
+        dryRun: true,
+        status: "ok",
+        summary: "Created WorkDrive-visible canonicalization dry-run manifest.",
+        counts: manifest.counts,
+      }).catch(() => undefined);
+      return {
+        dry_run: true,
+        applied: false,
+        manifest_id: manifestId,
+        manifest,
+      };
+    }
+
+    const now = new Date().toISOString();
+    let archiveCopiesWritten = 0;
+    let redirectFilesWritten = 0;
+    let documentsMarkedArchived = 0;
+    let vectorMetadataRefreshed = 0;
+    let memoryLinksWritten = 0;
+    const archiveResults: Array<{ from_path: string; to_path: string; workdrive_file_id: string; job_id: string }> = [];
+
+    for (const copy of [...manifest.archive_copies, ...manifest.shared_archive_copies]) {
+      const document = await this.repo.getDocumentById(copy.document_id);
+      if (!document) {
+        continue;
+      }
+      const downloaded = await this.zoho.downloadMarkdown(document.workdriveFileId);
+      const archiveMarkdown = buildArchivedCanonicalizationMarkdown({
+        document,
+        markdown: downloaded.markdown,
+        archivePath: copy.to_path,
+        canonicalProject: manifest.canonical_project,
+        duplicateProject: manifest.duplicate_project,
+        manifestId,
+        now,
+      });
+      const targetFolder = await ensureFolderForLogicalPath(this.zoho, this.config, copy.to_path);
+      const uploaded = await this.zoho.uploadMarkdownFile({
+        folderId: targetFolder.id,
+        fileName: fileNameFromPath(copy.to_path),
+        markdown: archiveMarkdown,
+        overrideExisting: true,
+      });
+      const jobId = await this.indexUploadedMarkdownAndRecordJob({
+        file: uploaded,
+        path: copy.to_path,
+        reason: "workdrive canonicalization archive copy",
+        project: manifest.canonical_project,
+        markdown: archiveMarkdown,
+      });
+      archiveCopiesWritten += 1;
+      archiveResults.push({
+        from_path: copy.from_path,
+        to_path: copy.to_path,
+        workdrive_file_id: uploaded.id,
+        job_id: jobId,
+      });
+      await this.repo.markDocumentsNoncanonical({
+        documentIds: [document.id],
+        canonicalGroup: manifest.canonical_project,
+        reason: `Archived by ${manifest.migration_slug}; preserved under canonical archive path.`,
+        status: "archived",
+        archivedToPath: copy.to_path,
+        manifestId,
+        notes: {
+          migration_slug: manifest.migration_slug,
+          canonical_project: manifest.canonical_project,
+          duplicate_project: manifest.duplicate_project,
+          archive_path: copy.to_path,
+        },
+      });
+      documentsMarkedArchived += 1;
+      if (await this.refreshArchivedVectorMetadata(document.id)) {
+        vectorMetadataRefreshed += 1;
+      }
+      const archivedDocument = await this.repo.getDocumentByPath(copy.to_path);
+      if (archivedDocument) {
+        await this.repo.linkMemory({
+          project: manifest.canonical_project,
+          fromType: "document",
+          fromId: document.id,
+          toType: "document",
+          toId: archivedDocument.id,
+          relation: "archived_as",
+          metadata: { migration_slug: manifest.migration_slug, manifest_id: manifestId },
+        });
+        memoryLinksWritten += 1;
+      }
+    }
+
+    const duplicate = (manifest.project_state.duplicate as MemoryProject | null) ?? null;
+    if (duplicate?.workdriveRootFolderId) {
+      const redirectMarkdown = buildMergedProjectRedirectMarkdown({
+        canonicalProject: manifest.canonical_project,
+        duplicateProject: manifest.duplicate_project,
+        manifestId,
+        now,
+      });
+      for (const redirect of manifest.redirect_files) {
+        const uploaded = await this.zoho.uploadMarkdownFile({
+          folderId: duplicate.workdriveRootFolderId,
+          fileName: redirect.file_name,
+          markdown: redirectMarkdown,
+          overrideExisting: true,
+        });
+        await this.indexUploadedMarkdownAndRecordJob({
+          file: uploaded,
+          path: redirect.path,
+          reason: "workdrive canonicalization redirect",
+          project: manifest.duplicate_project,
+          markdown: redirectMarkdown,
+        });
+        redirectFilesWritten += 1;
+      }
+    }
+
+    await this.repo.updateProjectProfile({
+      slug: manifest.canonical_project,
+      aliases: [manifest.duplicate_project],
+      canonicalProject: manifest.canonical_project,
+      canonicalStatus: "canonical",
+    });
+    await this.repo.updateProjectProfile({
+      slug: manifest.duplicate_project,
+      status: "archived",
+      canonicalProject: manifest.canonical_project,
+      mergedIntoProject: manifest.canonical_project,
+      canonicalStatus: "merged",
+      noncanonicalReason: `WorkDrive-visible canonicalization archived this duplicate under ${manifest.canonical_project}.`,
+    });
+    await this.repo.linkMemory({
+      project: manifest.canonical_project,
+      fromType: "project",
+      fromId: manifest.duplicate_project,
+      toType: "project",
+      toId: manifest.canonical_project,
+      relation: "merged_into",
+      metadata: { migration_slug: manifest.migration_slug, manifest_id: manifestId },
+    });
+    memoryLinksWritten += 1;
+
+    const counts = {
+      archive_copies_written: archiveCopiesWritten,
+      redirect_files_written: redirectFilesWritten,
+      documents_marked_archived: documentsMarkedArchived,
+      vector_metadata_refreshed: vectorMetadataRefreshed,
+      memory_links_written: memoryLinksWritten,
+    };
+    await this.repo.recordWorkdriveCanonicalizationManifest({
+      id: manifestId,
+      migrationSlug: manifest.migration_slug,
+      canonicalProject: manifest.canonical_project,
+      duplicateProject: manifest.duplicate_project,
+      dryRun: false,
+      applyRequested: true,
+      status: "applied",
+      summary: `Archived ${archiveCopiesWritten} WorkDrive-visible duplicate docs and wrote ${redirectFilesWritten} redirect files without deleting originals.`,
+      manifest: { ...manifest, archive_results: archiveResults },
+      counts,
+    });
+    await this.repo.recordMigrationAuditEvent({
+      migrationSlug: manifest.migration_slug,
+      phase: "apply",
+      dryRun: false,
+      status: "ok",
+      summary: `Applied WorkDrive-visible canonicalization: ${archiveCopiesWritten} archive copies, ${redirectFilesWritten} redirects, ${documentsMarkedArchived} document markers.`,
+      counts,
+    });
+    await this.repo.saveSourceEvent({
+      project: "memory-system-mcp",
+      source: "migration",
+      sourceId: `${manifest.migration_slug}:apply:${manifestId}`,
+      eventType: "workdrive_canonicalization",
+      title: "Applied WorkDrive-visible Light Lane canonicalization",
+      summary: "Copied duplicate Light Lane Markdown into canonical archive paths, wrote redirect markers, marked duplicate documents archived/noncanonical, refreshed vector metadata inactive, and preserved all originals.",
+      sensitivity: "internal",
+      savePolicy: "durable_summary",
+      metadata: { manifest_id: manifestId, ...counts },
+    }).catch(() => undefined);
+
+    return {
+      dry_run: false,
+      applied: true,
+      manifest_id: manifestId,
+      counts,
+      archive_results: archiveResults,
+      manifest,
+    };
+  }
+
+  async getWorkdriveCanonicalizationManifest(input: {
+    migrationSlug?: string;
+    canonicalProject?: string;
+    duplicateProject?: string;
+    limit?: number;
+  } = {}) {
+    return {
+      manifests: await this.repo.listWorkdriveCanonicalizationManifests({
+        migrationSlug: input.migrationSlug,
+        canonicalProject: input.canonicalProject ? normalizeProject(input.canonicalProject) : undefined,
+        duplicateProject: input.duplicateProject ? normalizeProject(input.duplicateProject) : undefined,
+        limit: input.limit,
+      }),
+    };
+  }
+
+  private async refreshArchivedVectorMetadata(documentId: string) {
+    const document = await this.repo.getDocumentById(documentId);
+    if (!document || !document.currentSnapshotId) {
+      return false;
+    }
+    const chunks = await this.repo.listChunksForDocument(documentId);
+    if (chunks.length === 0) {
+      return false;
+    }
+    const embeddings = await embedTexts(
+      this.env,
+      chunks.map((chunk) => chunk.content),
+    );
+    await replaceDocumentVectors(this.env, {
+      namespace: document.namespace,
+      documentId: document.id,
+      snapshotId: document.currentSnapshotId,
+      workdriveFileId: document.workdriveFileId,
+      title: document.title,
+      path: document.path,
+      project: document.project,
+      memoryType: document.memoryType,
+      status: "archived",
+      active: false,
+      superseded: false,
+      repo: document.repo,
+      repoPath: document.repoPath,
+      tags: document.tags,
+      source: document.source,
+      confidence: document.confidence,
+      usefulness: document.usefulness,
+      revision: document.revision,
+      url: document.permalink,
+      chunks,
+      embeddings,
+    });
+    return true;
+  }
+
   private async resolveSearchScopeProjects(input: {
     project: string;
     scope: AssistantSearchScope;
@@ -2797,6 +3871,16 @@ export class MemoryService {
       return uniqueProjects([input.project, ...related.map((project) => project.slug)]);
     }
     return [input.project];
+  }
+
+  private async resolveCurrentTruthEntities(project: string, query: string) {
+    const aliases = await this.repo.searchEntityAliases({ project, query, limit: 12 });
+    if (aliases.length > 0) {
+      return dedupeEntities(
+        aliases.map((alias) => alias.entity).filter((entity): entity is NonNullable<EntityAlias["entity"]> => Boolean(entity)),
+      );
+    }
+    return this.repo.searchEntities({ project, query, limit: 12 });
   }
 
   private async loadRelatedProjects(
@@ -2955,6 +4039,316 @@ function languageForPath(path: string) {
   return extension ? languages[extension] ?? extension : "";
 }
 
+function normalizeStateKey(value: string) {
+  return slugify(value).replace(/-/g, "_");
+}
+
+function dedupeEntities<T extends { id: string }>(entities: T[]) {
+  const seen = new Set<string>();
+  return entities.filter((entity) => {
+    if (seen.has(entity.id)) {
+      return false;
+    }
+    seen.add(entity.id);
+    return true;
+  });
+}
+
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeCurrentTruths<
+  T extends {
+    guardrails: {
+      current_state_required: boolean;
+      exact_entity_match: boolean;
+      semantic_memory_may_be_stale: boolean;
+    };
+    matched_aliases: unknown[];
+    entities: unknown[];
+    warnings: string[];
+    required_live_checks: unknown[];
+  },
+>(truths: T[], project: string, query: string) {
+  if (truths.length === 0) {
+    return {
+      project,
+      query,
+      guardrails: {
+        current_state_required: isCurrentStateQuery(query),
+        exact_entity_match: false,
+        semantic_memory_may_be_stale: isCurrentStateQuery(query),
+      },
+      matched_aliases: [],
+      entities: [],
+      warnings: [],
+      required_live_checks: [],
+    };
+  }
+  return {
+    project,
+    query,
+    guardrails: {
+      current_state_required: truths.some((truth) => truth.guardrails.current_state_required),
+      exact_entity_match: truths.some((truth) => truth.guardrails.exact_entity_match),
+      semantic_memory_may_be_stale: truths.some((truth) => truth.guardrails.semantic_memory_may_be_stale),
+    },
+    matched_aliases: truths.flatMap((truth) => truth.matched_aliases),
+    entities: truths.flatMap((truth) => truth.entities),
+    warnings: [...new Set(truths.flatMap((truth) => truth.warnings))],
+    required_live_checks: truths.flatMap((truth) => truth.required_live_checks),
+  };
+}
+
+function statesByKey(states: EntityState[]) {
+  return Object.fromEntries(
+    states.map((state) => [
+      state.stateKey,
+      {
+        id: state.id,
+        value: state.value,
+        status: state.status,
+        confidence: state.confidence,
+        source: state.source,
+        source_id: state.sourceId,
+        source_event_id: state.sourceEventId,
+        observed_at: state.observedAt,
+        valid_from: state.validFrom,
+        valid_until: state.validUntil,
+        updated_at: state.updatedAt,
+      },
+    ]),
+  );
+}
+
+function isCurrentStateQuery(query: string) {
+  const normalized = query.toLowerCase();
+  return [
+    "current",
+    "latest",
+    "today",
+    "now",
+    "quick",
+    "money",
+    "deal",
+    "opportunity",
+    "pipeline",
+    "status",
+    "stage",
+    "blocker",
+    "next action",
+    "replying",
+    "responding",
+    "close",
+    "priority",
+    "left",
+    "joined",
+  ].some((keyword) => normalized.includes(keyword));
+}
+
+function buildCurrentTruthWarnings(input: {
+  query: string;
+  currentStateRequired: boolean;
+  entities: Array<{ id: string; name: string }>;
+  states: EntityState[];
+}) {
+  if (!input.currentStateRequired) {
+    return [];
+  }
+  if (input.entities.length === 0) {
+    return [
+      "No exact entity alias or structured entity matched this current-state query; check live sources before making recommendations.",
+    ];
+  }
+  const statesByEntity = new Map<string, EntityState[]>();
+  for (const state of input.states) {
+    statesByEntity.set(state.entityId, [...(statesByEntity.get(state.entityId) ?? []), state]);
+  }
+  return input.entities
+    .filter((entity) => (statesByEntity.get(entity.id) ?? []).filter((state) => state.status === "active").length === 0)
+    .map((entity) => `No active current-state records were found for ${entity.name}; treat semantic memory as historical until live sources are checked.`);
+}
+
+function currentTruthLiveChecks(query: string) {
+  const reason = `Current-state query needs live verification before recommendations: ${query}`;
+  return [
+    {
+      source_kind: "zoho_crm",
+      timing: "before_recommendation",
+      required: true,
+      reason,
+    },
+    {
+      source_kind: "zoho_mail",
+      timing: "before_recommendation",
+      required: true,
+      reason,
+    },
+  ];
+}
+
+function documentEvidenceGrade(
+  hit: Pick<MemorySearchHit, "memoryType" | "status" | "active">,
+  currentTruth: {
+    guardrails: { current_state_required: boolean };
+    entities: Array<{ evidence_grade: string }>;
+  },
+) {
+  if (currentTruth.guardrails.current_state_required) {
+    return "historical_document";
+  }
+  if (!hit.active || hit.status !== "active") {
+    return "historical_document";
+  }
+  if (hit.memoryType === "current_context" || hit.memoryType === "decision") {
+    return "current_document";
+  }
+  return "background_document";
+}
+
+function analyzeAiBrainVaultPayload(input: {
+  project: string;
+  vaultName: string;
+  files: Array<{ path: string; markdown: string }>;
+  manifest?: Record<string, unknown>;
+  retrievalMap?: Record<string, unknown>;
+}) {
+  const proposedDocuments = input.files
+    .filter((file) => file.path.toLowerCase().endsWith(".md"))
+    .map((file) => {
+      const parsed = parseLooseMarkdown(file.markdown);
+      const title = markdownTitle(parsed.body) ?? titleFromPath(file.path);
+      const priority = frontmatterPriority(parsed.frontmatter, file.path);
+      const tags = [
+        "ai-brain-vault",
+        input.vaultName,
+        ...frontmatterTags(parsed.frontmatter),
+        ...file.path.split("/").slice(0, -1).map((part) => slugify(part)).filter(Boolean),
+      ];
+      return {
+        source_path: file.path,
+        title,
+        priority,
+        memory_type: priority === "load-first" || file.path.startsWith("00 ") ? "current_context" : "snippet",
+        tags: [...new Set(tags)],
+        wiki_links: extractWikiLinks(file.markdown),
+        raw_markdown: file.markdown,
+        frontmatter: parsed.frontmatter,
+      } as const;
+    });
+  return {
+    migration_slug: "ai-brain-vault-import",
+    project: input.project,
+    vault_name: input.vaultName,
+    dry_run: true,
+    counts: {
+      files_seen: input.files.length,
+      markdown_files: proposedDocuments.length,
+      load_first: proposedDocuments.filter((document) => document.priority === "load-first").length,
+      current_context: proposedDocuments.filter((document) => document.memory_type === "current_context").length,
+      snippets: proposedDocuments.filter((document) => document.memory_type === "snippet").length,
+    },
+    proposed_documents: proposedDocuments,
+    manifest: input.manifest ?? null,
+    retrieval_map: input.retrievalMap ?? null,
+    safety: {
+      deletes_workdrive_files: false,
+      deletes_d1_rows: false,
+      treats_as_live_pipeline: false,
+      raw_private_data_policy: "import only client-supplied vault markdown approved by caller",
+    },
+  };
+}
+
+function buildAiBrainImportMarkdown(input: {
+  proposal: ReturnType<typeof analyzeAiBrainVaultPayload>["proposed_documents"][number];
+  vaultName: string;
+  project: string;
+  authorClient: string;
+}) {
+  const now = new Date().toISOString();
+  const body = parseLooseMarkdown(input.proposal.raw_markdown).body;
+  const frontmatter = {
+    id: crypto.randomUUID(),
+    title: input.proposal.title,
+    project: input.project,
+    memory_type: input.proposal.memory_type,
+    status: "active",
+    revision: 1,
+    tags: input.proposal.tags,
+    created_at: now,
+    updated_at: now,
+    author_client: input.authorClient,
+    source: "ai-brain-vault",
+    source_urls: [],
+    confidence: 0.8,
+    usefulness: input.proposal.priority === "load-first" ? 1 : 0.85,
+    path: input.proposal.source_path,
+    supersedes: [],
+    superseded_by: [],
+    canonical: input.proposal.memory_type === "current_context",
+    ai_brain_vault: input.vaultName,
+    ai_brain_priority: input.proposal.priority,
+    wiki_links: input.proposal.wiki_links,
+  };
+  return buildMarkdownWithExtraFrontmatter(frontmatter, body);
+}
+
+function parseLooseMarkdown(markdown: string) {
+  const match = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) {
+    return { frontmatter: {}, body: markdown };
+  }
+  try {
+    return {
+      frontmatter: (YAML.parse(match[1] ?? "") ?? {}) as Record<string, unknown>,
+      body: markdown.slice(match[0].length),
+    };
+  } catch {
+    return { frontmatter: {}, body: markdown.slice(match[0].length) };
+  }
+}
+
+function frontmatterPriority(frontmatter: Record<string, unknown>, path: string) {
+  const raw = frontmatter.priority;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim().toLowerCase();
+  }
+  if (path.startsWith("00 ")) {
+    return "load-first";
+  }
+  return "normal";
+}
+
+function frontmatterTags(frontmatter: Record<string, unknown>) {
+  const raw = frontmatter.tags;
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof raw === "string") {
+    return raw.split(/[,\s]+/).filter(Boolean);
+  }
+  return [];
+}
+
+function markdownTitle(markdown: string) {
+  return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
+}
+
+function titleFromPath(path: string) {
+  const fileName = path.split("/").pop() ?? "Untitled";
+  return fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "Untitled";
+}
+
+function extractWikiLinks(markdown: string) {
+  return [...new Set([...markdown.matchAll(/\[\[([^\]]+)\]\]/g)].map((match) => match[1]).filter(isPresent))];
+}
+
 export async function processIndexQueueMessage(env: Env, message: IndexQueueMessage) {
   const repo = new MemoryRepository(env.DB);
   if (message.kind === "crawl") {
@@ -3017,6 +4411,167 @@ async function runDocumentReindexJob(
     });
     throw error;
   }
+}
+
+async function ensureFolderForLogicalPath(
+  zoho: ZohoWorkDriveClient,
+  config: ReturnType<typeof loadConfig>,
+  path: string,
+) {
+  const parts = path.split("/").filter(Boolean);
+  const fileName = parts.at(-1);
+  if (!fileName) {
+    throw new Error(`Cannot resolve WorkDrive folder for empty path ${path}.`);
+  }
+  if (parts[0] !== "memory") {
+    throw new Error(`Path ${path} is not under /memory.`);
+  }
+  if (parts[1] === "shared") {
+    if (!config.zoho.sharedRootFolderId) {
+      throw new Error("WORKDRIVE_SHARED_ROOT_FOLDER_ID is required.");
+    }
+    return zoho.ensureFolderPath(config.zoho.sharedRootFolderId, parts.slice(2, -1)).then((result) => result.folder);
+  }
+  if (parts[1] === "projects" && parts[2]) {
+    if (!config.zoho.projectsRootFolderId) {
+      throw new Error("WORKDRIVE_PROJECTS_ROOT_FOLDER_ID is required.");
+    }
+    return zoho.ensureFolderPath(config.zoho.projectsRootFolderId, parts.slice(2, -1)).then((result) => result.folder);
+  }
+  throw new Error(`Unsupported memory path ${path}.`);
+}
+
+function archivePathForMergedProjectDocument(
+  document: { path: string; fileName: string },
+  canonicalProject: string,
+  duplicateProject: string,
+) {
+  const prefix = `/memory/projects/${duplicateProject}/`;
+  const relative = document.path.startsWith(prefix)
+    ? document.path.slice(prefix.length)
+    : `unmapped/${document.fileName}`;
+  return `/memory/projects/${canonicalProject}/_merged/${duplicateProject}/${relative}`;
+}
+
+function sharedHistoryArchivePath(document: { path: string; fileName: string }, canonicalProject: string) {
+  return `/memory/shared/context/history/${canonicalProject}/${document.fileName}`;
+}
+
+function isSharedLightLaneCurrentContextDuplicate(document: ResolvedMemoryDocument) {
+  if (document.project !== "shared" || document.memoryType !== "current_context" || !document.active) {
+    return false;
+  }
+  const haystack = `${document.title} ${document.path}`.toLowerCase();
+  if (!haystack.includes("light-lane") && !haystack.includes("lightlane")) {
+    return false;
+  }
+  return (
+    haystack.includes("current-context") ||
+    haystack.includes("current context") ||
+    /\d{2}-\d{2}-\d{4}/.test(haystack)
+  );
+}
+
+function fileNameFromPath(path: string) {
+  return path.split("/").filter(Boolean).at(-1) ?? "untitled.md";
+}
+
+function workdriveCanonicalizationManifestId(canonicalProject: string, duplicateProject: string) {
+  return `workdrive-visible-canonicalization-${duplicateProject}-to-${canonicalProject}`;
+}
+
+function buildMarkdownWithExtraFrontmatter(frontmatter: Record<string, unknown>, body: string) {
+  return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${body.trim()}\n`;
+}
+
+function buildArchivedCanonicalizationMarkdown(input: {
+  document: ResolvedMemoryDocument;
+  markdown: string;
+  archivePath: string;
+  canonicalProject: string;
+  duplicateProject: string;
+  manifestId: string;
+  now: string;
+}) {
+  const parsed = parseMarkdownDocument(input.document.path, input.markdown);
+  const originalFrontmatter = parsed.frontmatter;
+  const frontmatter = {
+    ...originalFrontmatter,
+    id: crypto.randomUUID(),
+    title: input.document.title,
+    project: input.canonicalProject,
+    memory_type: input.document.memoryType,
+    status: "archived",
+    canonical: false,
+    revision: 1,
+    updated_at: input.now,
+    author_client: "contextos-canonicalization",
+    source_urls: input.document.permalink ? [input.document.permalink] : originalFrontmatter.source_urls,
+    canonical_project: input.canonicalProject,
+    merged_from: input.duplicateProject,
+    archived_from_path: input.document.path,
+    archived_from_document_id: input.document.id,
+    canonicalization_manifest_id: input.manifestId,
+    wiki_links: [
+      "[[light-lane]]",
+      "[[memory-system-mcp]]",
+      "[[Assistant Context OS]]",
+      "[[Fully Promoted Nelson]]",
+      "[[Fivestar Print]]",
+    ],
+  };
+  return buildMarkdownWithExtraFrontmatter(
+    frontmatter,
+    [
+      `# ${input.document.title}`,
+      "",
+      `> Archived noncanonical copy from \`${input.document.path}\`.`,
+      `> Canonical project: [[${input.canonicalProject}]]. No original content was deleted.`,
+      "",
+      parsed.body,
+    ].join("\n"),
+  );
+}
+
+function buildMergedProjectRedirectMarkdown(input: {
+  canonicalProject: string;
+  duplicateProject: string;
+  manifestId: string;
+  now: string;
+}) {
+  return buildMarkdownWithExtraFrontmatter(
+    {
+      id: crypto.randomUUID(),
+      title: `${input.duplicateProject} merged into ${input.canonicalProject}`,
+      project: input.duplicateProject,
+      memory_type: "historical_note",
+      status: "archived",
+      revision: 1,
+      tags: ["canonicalization", "merged-project", input.canonicalProject],
+      created_at: input.now,
+      updated_at: input.now,
+      author_client: "contextos-canonicalization",
+      source_urls: [],
+      supersedes: [],
+      superseded_by: [],
+      canonical: false,
+      canonical_project: input.canonicalProject,
+      merged_into: input.canonicalProject,
+      canonicalization_manifest_id: input.manifestId,
+    },
+    [
+      `# ${input.duplicateProject} merged into [[${input.canonicalProject}]]`,
+      "",
+      `This project folder was merged into \`${input.canonicalProject}\` by ContextOS on ${input.now}.`,
+      "",
+      "- No WorkDrive files were deleted.",
+      `- Canonical project path: \`/memory/projects/${input.canonicalProject}/\`.`,
+      `- Preserved archive path: \`/memory/projects/${input.canonicalProject}/_merged/${input.duplicateProject}/\`.`,
+      `- Migration audit id: \`${input.manifestId}\`.`,
+      "",
+      "Useful links: [[light-lane]], [[memory-system-mcp]], [[Assistant Context OS]], [[Fully Promoted Nelson]], [[Fivestar Print]].",
+    ].join("\n"),
+  );
 }
 
 export async function indexMarkdownDocument(
@@ -3986,6 +5541,7 @@ function recommendedLiveChecks(input: {
   tasks: ContextTask[];
   sourceEvents: SourceEvent[];
   warnings: string[];
+  currentTruthChecks?: unknown[];
 }) {
   const checks = new Set<string>();
   for (const source of input.activeSources ?? []) {
@@ -3999,6 +5555,12 @@ function recommendedLiveChecks(input: {
   }
   if (input.warnings.some((warning) => warning.includes("semantic"))) {
     checks.add("Run retrieval_diagnostics and consider reindexing before assuming memory is complete.");
+  }
+  for (const rawCheck of input.currentTruthChecks ?? []) {
+    const check = isRecord(rawCheck) ? rawCheck : {};
+    const sourceKind = typeof check.source_kind === "string" ? check.source_kind : "source";
+    const reason = typeof check.reason === "string" ? check.reason : "current truth guardrail";
+    checks.add(`Check live ${sourceKind} before relying on current-state recommendations: ${reason}`);
   }
   return [...checks];
 }

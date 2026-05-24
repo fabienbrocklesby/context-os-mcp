@@ -226,6 +226,20 @@ export type MigrationAuditEvent = {
   createdAt: string;
 };
 
+export type WorkdriveCanonicalizationManifest = {
+  id: string;
+  migrationSlug: string;
+  canonicalProject: string;
+  duplicateProject: string;
+  dryRun: boolean;
+  applyRequested: boolean;
+  status: string;
+  summary: string;
+  manifest: Record<string, unknown>;
+  counts: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type ProjectGithubRepo = {
   id: string;
   projectSlug: string;
@@ -267,6 +281,12 @@ export const entityTypeSchema = z.enum([
   "deal",
   "project",
   "other",
+]);
+
+export const entityStateStatusSchema = z.enum([
+  "active",
+  "superseded",
+  "archived",
 ]);
 
 export const taskStatusSchema = z.enum([
@@ -370,6 +390,7 @@ export const alignmentConfidenceSchema = z.enum(["low", "medium", "high"]);
 
 export type InitiativeStatus = z.infer<typeof initiativeStatusSchema>;
 export type EntityType = z.infer<typeof entityTypeSchema>;
+export type EntityStateStatus = z.infer<typeof entityStateStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type SourceSensitivity = z.infer<typeof sourceSensitivitySchema>;
@@ -422,6 +443,52 @@ export type MemoryEntity = {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+};
+
+export type EntityAlias = {
+  id: string;
+  project: string;
+  entityId: string;
+  alias: string;
+  normalizedAlias: string;
+  source: string | null;
+  confidence: number | null;
+  createdAt: string;
+  updatedAt: string;
+  entity?: MemoryEntity | null;
+};
+
+export type EntityState = {
+  id: string;
+  project: string;
+  entityId: string;
+  stateKey: string;
+  value: unknown;
+  valueJson: string;
+  status: EntityStateStatus;
+  confidence: number | null;
+  source: string | null;
+  sourceId: string | null;
+  sourceEventId: string | null;
+  validFrom: string | null;
+  validUntil: string | null;
+  supersededByStateId: string | null;
+  observedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ContextTruthMigrationManifest = {
+  id: string;
+  migrationSlug: string;
+  project: string;
+  dryRun: boolean;
+  applyRequested: boolean;
+  status: string;
+  summary: string;
+  manifest: Record<string, unknown>;
+  counts: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type DurableFact = {

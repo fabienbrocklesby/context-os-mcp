@@ -22,7 +22,11 @@ export default {
       return serveAuthenticatedMcpRequest(request, env, ctx, BEARER_PRINCIPAL);
     }
 
-    return oauthProvider.fetch(request, env, ctx);
+    const response = await oauthProvider.fetch(request, env, ctx);
+    if (url.pathname === config.mcpRoute) {
+      return normalizeMcpAuthErrorResponse(response);
+    }
+    return response;
   },
 
   async queue(batch, env, _ctx) {
@@ -48,4 +52,42 @@ function isBearerAuthorized(request: Request, bearerToken?: string) {
   }
   const header = request.headers.get("authorization");
   return header === `Bearer ${bearerToken}`;
+}
+
+async function normalizeMcpAuthErrorResponse(response: Response) {
+  if (response.status !== 401 && response.status !== 403) {
+    return response;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("text/plain")) {
+    return response;
+  }
+
+  const body = await response.text();
+  const headers = new Headers(response.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+
+  try {
+    return Response.json(JSON.parse(body), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch {
+    return Response.json(
+      {
+        error: {
+          message: body || "MCP authorization failed.",
+          code: response.status === 401 ? "unauthorized" : "forbidden",
+        },
+        status: response.status,
+      },
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      },
+    );
+  }
 }

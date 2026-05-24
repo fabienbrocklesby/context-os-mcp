@@ -3,9 +3,12 @@ import type {
   BranchProject,
   ChunkRecord,
   ClientEnvironment,
+  ContextTruthMigrationManifest,
   ContextTask,
   DurableFact,
   EnvironmentCapability,
+  EntityAlias,
+  EntityState,
   InitiativeProject,
   MigrationAuditEvent,
   MemoryFrontmatter,
@@ -22,6 +25,7 @@ import type {
   StrategyMilestone,
   StrategyNode,
   ToolCapability,
+  WorkdriveCanonicalizationManifest,
 } from "~/domain/memory";
 
 type DocumentRow = {
@@ -154,6 +158,33 @@ type MigrationAuditEventRow = {
   created_at: string;
 };
 
+type WorkdriveCanonicalizationManifestRow = {
+  id: string;
+  migration_slug: string;
+  canonical_project: string;
+  duplicate_project: string;
+  dry_run: number;
+  apply_requested: number;
+  status: string;
+  summary: string;
+  manifest_json: string;
+  counts_json: string | null;
+  created_at: string;
+};
+
+type ContextTruthMigrationManifestRow = {
+  id: string;
+  migration_slug: string;
+  project: string;
+  dry_run: number;
+  apply_requested: number;
+  status: string;
+  summary: string;
+  manifest_json: string;
+  counts_json: string | null;
+  created_at: string;
+};
+
 type ProjectGithubRepoRow = {
   id: string;
   project_slug: string;
@@ -216,6 +247,37 @@ type EntityRow = {
   source_id: string | null;
   confidence: number | null;
   metadata_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type EntityAliasRow = {
+  id: string;
+  project: string;
+  entity_id: string;
+  alias: string;
+  normalized_alias: string;
+  source: string | null;
+  confidence: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type EntityStateRow = {
+  id: string;
+  project: string;
+  entity_id: string;
+  state_key: string;
+  value_json: string;
+  status: EntityState["status"];
+  confidence: number | null;
+  source: string | null;
+  source_id: string | null;
+  source_event_id: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+  superseded_by_state_id: string | null;
+  observed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -399,6 +461,13 @@ type AlignmentAssessmentRow = {
 export class MemoryRepository {
   constructor(private readonly db: D1Database) {}
 
+  private async getProjectRowBySlug(slug: string) {
+    return this.db
+      .prepare("SELECT * FROM projects WHERE slug = ?1")
+      .bind(slug)
+      .first<ProjectRow>();
+  }
+
   async getProject(slugOrAlias: string) {
     const direct = await this.db
       .prepare("SELECT * FROM projects WHERE slug = ?1")
@@ -431,9 +500,17 @@ export class MemoryRepository {
     return mapProject(viaAlias);
   }
 
-  async listProjects() {
+  async listProjects(input: { includeMerged?: boolean; includeArchived?: boolean } = {}) {
+    const conditions: string[] = [];
+    if (!input.includeMerged) {
+      conditions.push("(canonical_status IS NULL OR canonical_status != 'merged')");
+    }
+    if (!input.includeArchived) {
+      conditions.push("status != 'archived'");
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const result = await this.db
-      .prepare("SELECT * FROM projects ORDER BY shared DESC, slug ASC")
+      .prepare(`SELECT * FROM projects ${where} ORDER BY shared DESC, slug ASC`)
       .all<ProjectRow>();
     return result.results.map((row) => mapProject(row)!);
   }
@@ -455,7 +532,7 @@ export class MemoryRepository {
     repoIndexFolderId?: string | null;
     lastHealth?: Record<string, unknown> | null;
   }) {
-    const existing = await this.getProject(input.slug);
+    const existing = mapProject(await this.getProjectRowBySlug(input.slug));
     const now = new Date().toISOString();
     const profile = input.profile ?? existing?.profile ?? {};
     const lastHealth = input.lastHealth ?? existing?.lastHealth ?? null;
@@ -522,7 +599,7 @@ export class MemoryRepository {
     noncanonicalReason?: string | null;
     canonicalStatus?: string | null;
   }) {
-    const existing = await this.getProject(input.slug);
+    const existing = mapProject(await this.getProjectRowBySlug(input.slug));
     if (!existing) {
       throw new Error(`Project ${input.slug} does not exist.`);
     }
@@ -1102,6 +1179,35 @@ export class MemoryRepository {
     return result.results.map((row) => row.vector_id);
   }
 
+  async listChunksForDocument(documentId: string) {
+    const result = await this.db
+      .prepare(
+        `
+          SELECT vector_id, chunk_index, heading_path, content, token_estimate, updated_at_unix
+          FROM chunks
+          WHERE document_id = ?1
+          ORDER BY chunk_index ASC
+        `,
+      )
+      .bind(documentId)
+      .all<{
+        vector_id: string;
+        chunk_index: number;
+        heading_path: string;
+        content: string;
+        token_estimate: number;
+        updated_at_unix: number;
+      }>();
+    return result.results.map((row) => ({
+      vectorId: row.vector_id,
+      chunkIndex: row.chunk_index,
+      headingPath: row.heading_path,
+      content: row.content,
+      tokenEstimate: row.token_estimate,
+      updatedAtUnix: row.updated_at_unix,
+    }));
+  }
+
   async getChunkCountForDocument(documentId: string) {
     const row = await this.db
       .prepare("SELECT COUNT(*) as count FROM chunks WHERE document_id = ?1")
@@ -1465,6 +1571,9 @@ export class MemoryRepository {
     documentIds: string[];
     canonicalGroup?: string | null;
     reason: string;
+    status?: MemoryStatus;
+    archivedToPath?: string | null;
+    manifestId?: string | null;
     notes?: Record<string, unknown>;
   }) {
     const now = new Date().toISOString();
@@ -1473,12 +1582,15 @@ export class MemoryRepository {
         .prepare(
           `
             UPDATE documents
-            SET active = 0,
+            SET status = COALESCE(?6, status),
+                active = 0,
                 canonical = 0,
                 canonical_group = ?2,
                 noncanonical_reason = ?3,
                 migration_notes_json = ?4,
-                updated_at = ?5
+                updated_at = ?5,
+                archived_to_path = ?7,
+                canonicalization_manifest_id = ?8
             WHERE id = ?1
           `,
         )
@@ -1488,9 +1600,146 @@ export class MemoryRepository {
           input.reason,
           JSON.stringify(input.notes ?? {}),
           now,
+          input.status ?? null,
+          input.archivedToPath ?? null,
+          input.manifestId ?? null,
         )
         .run();
     }
+  }
+
+  async recordWorkdriveCanonicalizationManifest(input: {
+    id?: string;
+    migrationSlug: string;
+    canonicalProject: string;
+    duplicateProject: string;
+    dryRun: boolean;
+    applyRequested?: boolean;
+    status: string;
+    summary: string;
+    manifest: Record<string, unknown>;
+    counts: Record<string, unknown>;
+  }) {
+    const id = input.id ?? crypto.randomUUID();
+    await this.db
+      .prepare(
+        `
+          INSERT INTO workdrive_canonicalization_manifests (
+            id, migration_slug, canonical_project, duplicate_project, dry_run, apply_requested,
+            status, summary, manifest_json, counts_json, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          ON CONFLICT(id) DO UPDATE SET
+            dry_run = excluded.dry_run,
+            apply_requested = excluded.apply_requested,
+            status = excluded.status,
+            summary = excluded.summary,
+            manifest_json = excluded.manifest_json,
+            counts_json = excluded.counts_json
+        `,
+      )
+      .bind(
+        id,
+        input.migrationSlug,
+        input.canonicalProject,
+        input.duplicateProject,
+        input.dryRun ? 1 : 0,
+        input.applyRequested ? 1 : 0,
+        input.status,
+        input.summary,
+        JSON.stringify(input.manifest),
+        JSON.stringify(input.counts),
+        new Date().toISOString(),
+      )
+      .run();
+    return id;
+  }
+
+  async listWorkdriveCanonicalizationManifests(input: {
+    migrationSlug?: string;
+    canonicalProject?: string;
+    duplicateProject?: string;
+    limit?: number;
+  } = {}) {
+    const limit = Math.min(input.limit ?? 10, 50);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM workdrive_canonicalization_manifests
+          WHERE (?1 IS NULL OR migration_slug = ?1)
+            AND (?2 IS NULL OR canonical_project = ?2)
+            AND (?3 IS NULL OR duplicate_project = ?3)
+          ORDER BY created_at DESC
+          LIMIT ?4
+        `,
+      )
+      .bind(input.migrationSlug ?? null, input.canonicalProject ?? null, input.duplicateProject ?? null, limit)
+      .all<WorkdriveCanonicalizationManifestRow>();
+    return result.results.map(mapWorkdriveCanonicalizationManifest);
+  }
+
+  async recordContextTruthMigrationManifest(input: {
+    id?: string;
+    migrationSlug: string;
+    project: string;
+    dryRun: boolean;
+    applyRequested?: boolean;
+    status: string;
+    summary: string;
+    manifest: Record<string, unknown>;
+    counts: Record<string, unknown>;
+  }) {
+    const id = input.id ?? crypto.randomUUID();
+    await this.db
+      .prepare(
+        `
+          INSERT INTO context_truth_migration_manifests (
+            id, migration_slug, project, dry_run, apply_requested, status, summary,
+            manifest_json, counts_json, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(id) DO UPDATE SET
+            dry_run = excluded.dry_run,
+            apply_requested = excluded.apply_requested,
+            status = excluded.status,
+            summary = excluded.summary,
+            manifest_json = excluded.manifest_json,
+            counts_json = excluded.counts_json
+        `,
+      )
+      .bind(
+        id,
+        input.migrationSlug,
+        input.project,
+        input.dryRun ? 1 : 0,
+        input.applyRequested ? 1 : 0,
+        input.status,
+        input.summary,
+        JSON.stringify(input.manifest),
+        JSON.stringify(input.counts),
+        new Date().toISOString(),
+      )
+      .run();
+    return id;
+  }
+
+  async listContextTruthMigrationManifests(input: {
+    migrationSlug?: string;
+    project?: string;
+    limit?: number;
+  } = {}) {
+    const limit = Math.min(input.limit ?? 10, 50);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM context_truth_migration_manifests
+          WHERE (?1 IS NULL OR migration_slug = ?1)
+            AND (?2 IS NULL OR project = ?2)
+          ORDER BY created_at DESC
+          LIMIT ?3
+        `,
+      )
+      .bind(input.migrationSlug ?? null, input.project ?? null, limit)
+      .all<ContextTruthMigrationManifestRow>();
+    return result.results.map(mapContextTruthMigrationManifest);
   }
 
   async getProjectStats(projectSlug: string) {
@@ -1813,6 +2062,257 @@ export class MemoryRepository {
       .bind(input.project ?? null, query ?? null, limit)
       .all<EntityRow>();
     return result.results.map((row) => mapEntity(row)!);
+  }
+
+  async upsertEntityAliases(input: {
+    project: string;
+    entityId: string;
+    aliases: string[];
+    source?: string | null;
+    confidence?: number | null;
+  }) {
+    const now = new Date().toISOString();
+    const normalizedAliases = [
+      ...new Map(
+        input.aliases
+          .map((alias) => alias.trim())
+          .filter(Boolean)
+          .map((alias) => [normalizeEntityAlias(alias), alias] as const),
+      ).entries(),
+    ];
+    if (normalizedAliases.length === 0) {
+      return [];
+    }
+    await this.db.batch(
+      normalizedAliases.map(([normalizedAlias, alias]) =>
+        this.db
+          .prepare(
+            `
+              INSERT INTO entity_aliases (
+                id, project, entity_id, alias, normalized_alias, source, confidence, created_at, updated_at
+              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+              ON CONFLICT(project, normalized_alias, entity_id) DO UPDATE SET
+                alias = excluded.alias,
+                source = COALESCE(excluded.source, entity_aliases.source),
+                confidence = COALESCE(excluded.confidence, entity_aliases.confidence),
+                updated_at = excluded.updated_at
+            `,
+          )
+          .bind(
+            crypto.randomUUID(),
+            input.project,
+            input.entityId,
+            alias,
+            normalizedAlias,
+            input.source ?? null,
+            input.confidence ?? null,
+            now,
+          ),
+      ),
+    );
+    return this.listEntityAliases({ project: input.project, entityId: input.entityId });
+  }
+
+  async listEntityAliases(input: { project?: string; entityId?: string; limit?: number } = {}) {
+    const limit = Math.min(input.limit ?? 100, 500);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM entity_aliases
+          WHERE (?1 IS NULL OR project = ?1 OR project = 'shared')
+            AND (?2 IS NULL OR entity_id = ?2)
+          ORDER BY confidence DESC, updated_at DESC, alias ASC
+          LIMIT ?3
+        `,
+      )
+      .bind(input.project ?? null, input.entityId ?? null, limit)
+      .all<EntityAliasRow>();
+    return this.attachEntitiesToAliases(result.results.map(mapEntityAlias));
+  }
+
+  async searchEntityAliases(input: { project?: string; query?: string; limit?: number }) {
+    const limit = Math.min(input.limit ?? 20, 100);
+    const normalizedQuery = normalizeEntityAlias(input.query ?? "");
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM entity_aliases
+          WHERE (?1 IS NULL OR project = ?1 OR project = 'shared')
+            AND (
+              ?2 = ''
+              OR instr(?2, normalized_alias) > 0
+              OR instr(normalized_alias, ?2) > 0
+            )
+          ORDER BY
+            CASE WHEN normalized_alias = ?2 THEN 0 ELSE 1 END,
+            length(normalized_alias) DESC,
+            confidence DESC,
+            updated_at DESC
+          LIMIT ?3
+        `,
+      )
+      .bind(input.project ?? null, normalizedQuery, limit)
+      .all<EntityAliasRow>();
+    return this.attachEntitiesToAliases(result.results.map(mapEntityAlias));
+  }
+
+  async upsertEntityState(input: {
+    id?: string;
+    project: string;
+    entityId: string;
+    stateKey: string;
+    value: unknown;
+    confidence?: number | null;
+    source?: string | null;
+    sourceId?: string | null;
+    sourceEventId?: string | null;
+    validFrom?: string | null;
+    validUntil?: string | null;
+    observedAt?: string | null;
+    status?: EntityState["status"];
+    supersedeActive?: boolean;
+  }) {
+    const now = new Date().toISOString();
+    const id = input.id ?? crypto.randomUUID();
+    const status = input.status ?? "active";
+    const observedAt = input.observedAt ?? now;
+    const statements = [];
+    if (status === "active" && input.supersedeActive !== false) {
+      statements.push(
+        this.db
+          .prepare(
+            `
+              UPDATE entity_states
+              SET status = 'superseded',
+                  valid_until = COALESCE(valid_until, ?4),
+                  superseded_by_state_id = ?5,
+                  updated_at = ?4
+              WHERE project = ?1
+                AND entity_id = ?2
+                AND state_key = ?3
+                AND status = 'active'
+            `,
+          )
+          .bind(input.project, input.entityId, input.stateKey, now, id),
+      );
+    }
+    statements.push(
+      this.db
+        .prepare(
+          `
+            INSERT INTO entity_states (
+              id, project, entity_id, state_key, value_json, status, confidence, source,
+              source_id, source_event_id, valid_from, valid_until, superseded_by_state_id,
+              observed_at, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            ON CONFLICT(id) DO UPDATE SET
+              value_json = excluded.value_json,
+              status = excluded.status,
+              confidence = excluded.confidence,
+              source = excluded.source,
+              source_id = excluded.source_id,
+              source_event_id = excluded.source_event_id,
+              valid_from = excluded.valid_from,
+              valid_until = excluded.valid_until,
+              superseded_by_state_id = excluded.superseded_by_state_id,
+              observed_at = excluded.observed_at,
+              updated_at = excluded.updated_at
+          `,
+        )
+        .bind(
+          id,
+          input.project,
+          input.entityId,
+          input.stateKey,
+          JSON.stringify(input.value),
+          status,
+          input.confidence ?? null,
+          input.source ?? null,
+          input.sourceId ?? null,
+          input.sourceEventId ?? null,
+          input.validFrom ?? observedAt,
+          input.validUntil ?? null,
+          null,
+          observedAt,
+          now,
+          now,
+        ),
+    );
+    await this.db.batch(statements);
+    return this.getEntityState(id);
+  }
+
+  async getEntityState(id: string) {
+    return mapEntityState(
+      await this.db
+        .prepare("SELECT * FROM entity_states WHERE id = ?1")
+        .bind(id)
+        .first<EntityStateRow>(),
+    );
+  }
+
+  async listEntityStatesForEntities(input: {
+    project?: string;
+    entityIds: string[];
+    includeSuperseded?: boolean;
+    stateKeys?: string[];
+    limit?: number;
+  }) {
+    const entityIds = [...new Set(input.entityIds.filter(Boolean))];
+    if (entityIds.length === 0) {
+      return [];
+    }
+    const limit = Math.min(input.limit ?? 200, 500);
+    const binds: Array<string | number> = [];
+    const entityPlaceholders = entityIds.map((entityId) => {
+      binds.push(entityId);
+      return `?${binds.length}`;
+    });
+    const conditions = [`entity_id IN (${entityPlaceholders.join(", ")})`];
+    if (input.project) {
+      binds.push(input.project);
+      conditions.push(`(project = ?${binds.length} OR project = 'shared')`);
+    }
+    if (!input.includeSuperseded) {
+      conditions.push("status = 'active'");
+    }
+    if (input.stateKeys?.length) {
+      const keyPlaceholders = input.stateKeys.map((key) => {
+        binds.push(key);
+        return `?${binds.length}`;
+      });
+      conditions.push(`state_key IN (${keyPlaceholders.join(", ")})`);
+    }
+    binds.push(limit);
+    const result = await this.db
+      .prepare(
+        `
+          SELECT * FROM entity_states
+          WHERE ${conditions.join(" AND ")}
+          ORDER BY
+            CASE status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
+            COALESCE(observed_at, updated_at) DESC
+          LIMIT ?${binds.length}
+        `,
+      )
+      .bind(...binds)
+      .all<EntityStateRow>();
+    return result.results.map((row) => mapEntityState(row)!);
+  }
+
+  private async attachEntitiesToAliases(aliases: EntityAlias[]) {
+    const entityIds = [...new Set(aliases.map((alias) => alias.entityId))];
+    const entities = new Map<string, MemoryEntity>();
+    for (const entityId of entityIds) {
+      const entity = await this.getEntity(entityId);
+      if (entity) {
+        entities.set(entityId, entity);
+      }
+    }
+    return aliases.map((alias) => ({
+      ...alias,
+      entity: entities.get(alias.entityId) ?? null,
+    }));
   }
 
   async upsertTask(input: {
@@ -2972,6 +3472,41 @@ function mapMigrationAuditEvent(row: MigrationAuditEventRow): MigrationAuditEven
   };
 }
 
+function mapWorkdriveCanonicalizationManifest(
+  row: WorkdriveCanonicalizationManifestRow,
+): WorkdriveCanonicalizationManifest {
+  return {
+    id: row.id,
+    migrationSlug: row.migration_slug,
+    canonicalProject: row.canonical_project,
+    duplicateProject: row.duplicate_project,
+    dryRun: row.dry_run === 1,
+    applyRequested: row.apply_requested === 1,
+    status: row.status,
+    summary: row.summary,
+    manifest: parseJsonObject(row.manifest_json),
+    counts: parseJsonObject(row.counts_json),
+    createdAt: row.created_at,
+  };
+}
+
+function mapContextTruthMigrationManifest(
+  row: ContextTruthMigrationManifestRow,
+): ContextTruthMigrationManifest {
+  return {
+    id: row.id,
+    migrationSlug: row.migration_slug,
+    project: row.project,
+    dryRun: row.dry_run === 1,
+    applyRequested: row.apply_requested === 1,
+    status: row.status,
+    summary: row.summary,
+    manifest: parseJsonObject(row.manifest_json),
+    counts: parseJsonObject(row.counts_json),
+    createdAt: row.created_at,
+  };
+}
+
 function mapProjectGithubRepo(row: ProjectGithubRepoRow): ProjectGithubRepo {
   return {
     id: row.id,
@@ -3035,6 +3570,45 @@ function mapEntity(row?: EntityRow | null): MemoryEntity | null {
     sourceId: row.source_id,
     confidence: row.confidence,
     metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapEntityAlias(row: EntityAliasRow): EntityAlias {
+  return {
+    id: row.id,
+    project: row.project,
+    entityId: row.entity_id,
+    alias: row.alias,
+    normalizedAlias: row.normalized_alias,
+    source: row.source,
+    confidence: row.confidence,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapEntityState(row?: EntityStateRow | null): EntityState | null {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    project: row.project,
+    entityId: row.entity_id,
+    stateKey: row.state_key,
+    value: parseJsonValue(row.value_json),
+    valueJson: row.value_json,
+    status: row.status,
+    confidence: row.confidence,
+    source: row.source,
+    sourceId: row.source_id,
+    sourceEventId: row.source_event_id,
+    validFrom: row.valid_from,
+    validUntil: row.valid_until,
+    supersededByStateId: row.superseded_by_state_id,
+    observedAt: row.observed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3270,6 +3844,17 @@ function parseJsonObject(value: string | null): Record<string, unknown> {
   }
 }
 
+function parseJsonValue(value: string | null): unknown {
+  if (value === null) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function parseJsonArray(value: string | null): string[] {
   if (!value) {
     return [];
@@ -3280,4 +3865,12 @@ function parseJsonArray(value: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+function normalizeEntityAlias(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

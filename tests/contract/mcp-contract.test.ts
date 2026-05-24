@@ -172,6 +172,25 @@ vi.mock("~/domain/service", () => {
       return { events: [] };
     }
 
+    async analyzeWorkdriveCanonicalization() {
+      return {
+        dry_run: true,
+        manifest: {
+          migration_slug: "workdrive-visible-canonicalization",
+          canonical_project: "light-lane",
+          duplicate_project: "lightlane",
+        },
+      };
+    }
+
+    async runWorkdriveCanonicalization() {
+      return { dry_run: true, applied: false, manifest_id: "manifest-1" };
+    }
+
+    async getWorkdriveCanonicalizationManifest() {
+      return { manifests: [] };
+    }
+
     getOperationalContext() {
       return {
         time_context: {
@@ -343,6 +362,47 @@ vi.mock("~/domain/service", () => {
       return { facts: [], saved: [] };
     }
 
+    async upsertEntityState() {
+      return {
+        entity: { id: "entity-1", name: "Acme Jet" },
+        state: { id: "state-1", stateKey: "deal_stage", value: "proposal_sent" },
+        aliases: [],
+      };
+    }
+
+    async getEntityCurrentState() {
+      return {
+        entity: { id: "entity-1", name: "Acme Jet" },
+        states: { deal_stage: { value: "proposal_sent" } },
+      };
+    }
+
+    async resolveCurrentTruth() {
+      return {
+        entities: [],
+        guardrails: { current_state_required: true },
+        warnings: [],
+        required_live_checks: [],
+      };
+    }
+
+    async analyzeContextTruthMigration() {
+      return {
+        migration_slug: "context-truth-engine",
+        dry_run: true,
+        counts: {},
+        safety: { deletes_workdrive_files: false, deletes_d1_rows: false },
+      };
+    }
+
+    async runContextTruthMigration() {
+      return { dry_run: true, applied: false, analysis: { counts: {} } };
+    }
+
+    async importAiBrainVault() {
+      return { dry_run: true, applied: false, analysis: { counts: { files_seen: 0 } } };
+    }
+
     async upsertTask() {
       return { task: { title: "Follow up" } };
     }
@@ -464,6 +524,12 @@ describe("MCP contract", () => {
         "link_memory",
         "save_source_event",
         "extract_durable_facts",
+        "upsert_entity_state",
+        "get_entity_current_state",
+        "resolve_current_truth",
+        "analyze_context_truth_migration",
+        "run_context_truth_migration",
+        "import_ai_brain_vault",
         "upsert_task",
         "daily_briefing",
         "context_health_check",
@@ -476,6 +542,9 @@ describe("MCP contract", () => {
         "analyze_memory_migration",
         "run_memory_migration",
         "get_migration_audit",
+        "analyze_workdrive_canonicalization",
+        "run_workdrive_canonicalization",
+        "get_workdrive_canonicalization_manifest",
         "retrieval_diagnostics",
       ]),
     );
