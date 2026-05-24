@@ -1954,6 +1954,98 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       ),
   );
 
+  const lightLaneKnownDealUpdateSchema = z.object({
+    entity_name: z.string().min(1),
+    source: z.string().min(1),
+    confidence: z.number().min(0).max(1).optional(),
+    summary: z.string().optional(),
+    states: z.record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    ),
+  });
+
+  const lightLaneRecoverySchema = z.object({
+    ai_brain_files: z.array(z.object({
+      path: z.string().min(1),
+      markdown: z.string(),
+    })).optional(),
+    ai_brain_analysis: z.record(z.string(), z.unknown()).optional(),
+    associated_repos: z.array(z.string()).optional(),
+    known_deal_updates: z.array(lightLaneKnownDealUpdateSchema).optional(),
+  });
+
+  server.registerTool(
+    "analyze_light_lane_memory_recovery",
+    {
+      description:
+        "Read-only Light Lane memory recovery analysis. Plans AI Brain import, canonical project current-context docs, stale shared deal routing, shared archive actions, and repo coverage without writing.",
+      inputSchema: lightLaneRecoverySchema,
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ ai_brain_files, ai_brain_analysis, associated_repos, known_deal_updates }) =>
+      textResult(
+        await service.analyzeLightLaneMemoryRecovery({
+          aiBrainFiles: ai_brain_files,
+          aiBrainAnalysis: ai_brain_analysis,
+          associatedRepos: associated_repos,
+          knownDealUpdates: known_deal_updates?.map((update) => ({
+            entityName: update.entity_name,
+            source: update.source,
+            confidence: update.confidence,
+            summary: update.summary,
+            states: update.states,
+          })),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "run_light_lane_memory_recovery",
+    {
+      description:
+        "Run Light Lane memory recovery. Defaults to dry-run; apply=true and dry_run=false imports the AI Brain, writes canonical Light Lane current context, upserts stale deal entity states, archives shared originals, and associates/indexes visible Light Lane repos.",
+      inputSchema: lightLaneRecoverySchema.extend({
+        dry_run: z.boolean().optional(),
+        apply: z.boolean().optional(),
+        author_client: z.string().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      ai_brain_files,
+      ai_brain_analysis,
+      associated_repos,
+      known_deal_updates,
+      dry_run,
+      apply,
+      author_client,
+    }) =>
+      textResult(
+        await service.runLightLaneMemoryRecovery({
+          aiBrainFiles: ai_brain_files,
+          aiBrainAnalysis: ai_brain_analysis,
+          associatedRepos: associated_repos,
+          knownDealUpdates: known_deal_updates?.map((update) => ({
+            entityName: update.entity_name,
+            source: update.source,
+            confidence: update.confidence,
+            summary: update.summary,
+            states: update.states,
+          })),
+          dryRun: dry_run,
+          apply,
+          authorClient: author_client,
+        }),
+      ),
+  );
+
   server.registerTool(
     "upsert_task",
     {

@@ -14,6 +14,12 @@ import {
   planEnvironmentToolUse,
 } from "~/domain/environment-capabilities";
 import { parseMarkdownDocument } from "~/domain/frontmatter";
+import {
+  analyzeLightLaneMemoryRecovery as buildLightLaneMemoryRecoveryAnalysis,
+  type LightLaneArchiveAction,
+  type LightLaneKnownDealUpdate,
+  type LightLaneRecoveryAiBrainInput,
+} from "~/domain/light-lane-memory-recovery";
 import { buildOperatingBrief, buildRequestPlan } from "~/domain/operating-brief";
 import {
   buildLogicalPath,
@@ -3390,6 +3396,227 @@ export class MemoryService {
     };
   }
 
+  async analyzeLightLaneMemoryRecovery(input: {
+    aiBrainFiles?: Array<{ path: string; markdown: string }>;
+    aiBrainAnalysis?: LightLaneRecoveryAiBrainInput;
+    associatedRepos?: string[];
+    knownDealUpdates?: LightLaneKnownDealUpdate[];
+  } = {}) {
+    const [documents, repos] = await Promise.all([
+      this.repo.listAllDocuments({ limit: 5000 }),
+      input.associatedRepos
+        ? Promise.resolve([])
+        : this.repo.listProjectGithubRepos("light-lane").catch(() => []),
+    ]);
+    const aiBrainAnalysis = input.aiBrainAnalysis
+      ?? (input.aiBrainFiles?.length
+        ? analyzeAiBrainVaultPayloadV2({
+            project: "light-lane",
+            vaultName: "AI Brain Vault",
+            files: input.aiBrainFiles,
+            preserveWikilinks: true,
+            applyLinks: true,
+            currentContextPriorities: ["load-first", "high"],
+          })
+        : inferExistingAiBrainImport(documents));
+
+    return buildLightLaneMemoryRecoveryAnalysis({
+      documents: documents.map((document) => ({
+        id: document.id,
+        project: document.project,
+        title: document.title,
+        path: document.path,
+        memoryType: document.memoryType,
+        status: document.status,
+        tags: document.tags,
+      })),
+      aiBrainAnalysis,
+      associatedRepos: input.associatedRepos ?? repos.map((repo) => repo.repoFullName),
+      knownDealUpdates: input.knownDealUpdates,
+    });
+  }
+
+  async runLightLaneMemoryRecovery(input: {
+    aiBrainFiles?: Array<{ path: string; markdown: string }>;
+    aiBrainAnalysis?: LightLaneRecoveryAiBrainInput;
+    associatedRepos?: string[];
+    knownDealUpdates?: LightLaneKnownDealUpdate[];
+    dryRun?: boolean;
+    apply?: boolean;
+    authorClient?: string;
+  } = {}) {
+    const apply = input.apply === true;
+    const dryRun = input.dryRun !== false || !apply;
+    const analysis = await this.analyzeLightLaneMemoryRecovery({
+      aiBrainFiles: input.aiBrainFiles,
+      aiBrainAnalysis: input.aiBrainAnalysis,
+      associatedRepos: input.associatedRepos,
+      knownDealUpdates: input.knownDealUpdates,
+    });
+    const manifestId = "light-lane-memory-recovery-light-lane";
+    const counts = lightLaneRecoveryCounts(analysis);
+    if (dryRun) {
+      await this.repo.recordContextTruthMigrationManifest({
+        id: manifestId,
+        migrationSlug: analysis.migration_slug,
+        project: analysis.project,
+        dryRun: true,
+        applyRequested: false,
+        status: "dry_run",
+        summary: `Dry run prepared Light Lane recovery: ${counts.current_context_documents} current-context docs, ${counts.deal_state_actions} entity-state writes, ${counts.shared_documents_to_archive} shared docs to archive, and ${counts.repos_to_associate} repos to associate.`,
+        manifest: analysis,
+        counts,
+      });
+      return {
+        dry_run: true,
+        applied: false,
+        manifest_id: manifestId,
+        analysis,
+      };
+    }
+
+    if (!analysis.quality_gates.ready_to_apply) {
+      await this.repo.recordContextTruthMigrationManifest({
+        id: manifestId,
+        migrationSlug: analysis.migration_slug,
+        project: analysis.project,
+        dryRun: false,
+        applyRequested: true,
+        status: "blocked",
+        summary: `Light Lane recovery apply blocked: ${analysis.quality_gates.blockers.join(", ")}`,
+        manifest: analysis,
+        counts,
+      });
+      return {
+        dry_run: false,
+        applied: false,
+        manifest_id: manifestId,
+        blocked: true,
+        blockers: analysis.quality_gates.blockers,
+        analysis,
+      };
+    }
+
+    const authorClient = input.authorClient ?? this.principal.login;
+    const aiBrainImport = input.aiBrainFiles?.length
+      ? await this.importAiBrainVault({
+          project: "light-lane",
+          vaultName: "AI Brain Vault",
+          files: input.aiBrainFiles,
+          dryRun: false,
+          apply: true,
+          preserveWikilinks: true,
+          applyLinks: true,
+          currentContextPriorities: ["load-first", "high"],
+          authorClient,
+        })
+      : null;
+    const currentContextWritten = [];
+    for (const document of analysis.current_context_documents) {
+      currentContextWritten.push(
+        await this.updateContextDocument({
+          project: "light-lane",
+          path: document.target_path,
+          title: document.title,
+          markdown: document.markdown,
+          authorClient,
+        }),
+      );
+    }
+    const entityStatesWritten = [];
+    for (const action of analysis.deal_state_actions) {
+      entityStatesWritten.push(
+        await this.upsertEntityState({
+          project: "light-lane",
+          entityType: "deal",
+          entityName: action.entity_name,
+          stateKey: action.state_key,
+          value: action.value,
+          confidence: action.confidence,
+          source: action.source,
+          sourceId: analysis.migration_slug,
+          observedAt: new Date().toISOString(),
+        }),
+      );
+    }
+    const archived = await this.archiveLightLaneRecoveryDocuments({
+      actions: analysis.archive_actions,
+      manifestId,
+      authorClient,
+    });
+    const reposAssociated = [];
+    for (const action of analysis.repo_actions.associate) {
+      reposAssociated.push(await this.associateGithubRepo(action));
+    }
+    const reposIndexed = [];
+    for (const action of analysis.repo_actions.index_overview) {
+      reposIndexed.push(
+        await this.indexGithubRepoOverview({
+          ...action,
+          authorClient,
+        }),
+      );
+    }
+    const applyCounts = {
+      ...counts,
+      ai_brain_current_context_written: aiBrainImport?.current_context_written ?? 0,
+      ai_brain_snippets_written: aiBrainImport?.snippets_written ?? 0,
+      ai_brain_links_written: aiBrainImport?.links_written ?? 0,
+      current_context_written: currentContextWritten.length,
+      entity_states_written: entityStatesWritten.length,
+      documents_archived: archived.documents_archived,
+      repos_associated: reposAssociated.length,
+      repos_indexed: reposIndexed.length,
+    };
+    await this.repo.recordContextTruthMigrationManifest({
+      id: manifestId,
+      migrationSlug: analysis.migration_slug,
+      project: analysis.project,
+      dryRun: false,
+      applyRequested: true,
+      status: "applied",
+      summary: `Applied Light Lane recovery: imported AI Brain material, wrote ${currentContextWritten.length} canonical current-context docs, wrote ${entityStatesWritten.length} entity states, archived ${archived.documents_archived} shared docs, and indexed ${reposIndexed.length} repos.`,
+      manifest: {
+        ...analysis,
+        apply_results: {
+          ai_brain_import: aiBrainImport,
+          current_context_written: currentContextWritten,
+          entity_states_written: entityStatesWritten,
+          archived,
+          repos_associated: reposAssociated,
+          repos_indexed: reposIndexed,
+        },
+      },
+      counts: applyCounts,
+    });
+    await this.repo.saveSourceEvent({
+      project: "memory-system-mcp",
+      source: "migration",
+      sourceId: `${analysis.migration_slug}:apply:${manifestId}`,
+      eventType: "light_lane_memory_recovery",
+      title: "Applied Light Lane memory recovery",
+      summary: "Imported Light Lane AI Brain content, wrote project-scoped current context, moved deal state into structured entity states, archived misplaced shared current-context documents, and associated/indexed Light Lane repositories.",
+      sensitivity: "internal",
+      savePolicy: "durable_summary",
+      metadata: applyCounts,
+    }).catch(() => undefined);
+    return {
+      dry_run: false,
+      applied: true,
+      manifest_id: manifestId,
+      analysis,
+      counts: applyCounts,
+      apply_results: {
+        ai_brain_import: aiBrainImport,
+        current_context_written: currentContextWritten,
+        entity_states_written: entityStatesWritten,
+        archived,
+        repos_associated: reposAssociated,
+        repos_indexed: reposIndexed,
+      },
+    };
+  }
+
   async analyzeWorkdriveCanonicalization(input: {
     canonicalProject?: string;
     duplicateProject?: string;
@@ -3805,6 +4032,101 @@ export class MemoryService {
         duplicateProject: input.duplicateProject ? normalizeProject(input.duplicateProject) : undefined,
         limit: input.limit,
       }),
+    };
+  }
+
+  async archiveLightLaneRecoveryDocuments(input: {
+    actions: LightLaneArchiveAction[];
+    manifestId: string;
+    authorClient?: string;
+  }) {
+    const now = new Date().toISOString();
+    const archiveResults: Array<{
+      from_path: string;
+      to_path: string;
+      workdrive_file_id: string;
+      job_id: string;
+    }> = [];
+    let documentsArchived = 0;
+    let vectorMetadataRefreshed = 0;
+    let memoryLinksWritten = 0;
+
+    for (const action of input.actions) {
+      const document = await this.repo.getDocumentById(action.document_id);
+      if (!document) {
+        continue;
+      }
+      const downloaded = await this.zoho.downloadMarkdown(document.workdriveFileId);
+      const archiveMarkdown = buildLightLaneRecoveryArchiveMarkdown({
+        document,
+        markdown: downloaded.markdown,
+        action,
+        manifestId: input.manifestId,
+        now,
+        authorClient: input.authorClient ?? this.principal.login,
+      });
+      const targetFolder = await ensureFolderForLogicalPath(this.zoho, this.config, action.to_path);
+      const uploaded = await this.zoho.uploadMarkdownFile({
+        folderId: targetFolder.id,
+        fileName: fileNameFromPath(action.to_path),
+        markdown: archiveMarkdown,
+        overrideExisting: true,
+      });
+      const jobId = await this.indexUploadedMarkdownAndRecordJob({
+        file: uploaded,
+        path: action.to_path,
+        reason: "light lane memory recovery archive copy",
+        project: "light-lane",
+        markdown: archiveMarkdown,
+      });
+      archiveResults.push({
+        from_path: action.from_path,
+        to_path: action.to_path,
+        workdrive_file_id: uploaded.id,
+        job_id: jobId,
+      });
+      await this.repo.markDocumentsNoncanonical({
+        documentIds: [document.id],
+        canonicalGroup: "light-lane",
+        reason: "Archived by light-lane-memory-recovery; durable truth was rewritten into project-scoped Light Lane context or entity state.",
+        status: "archived",
+        archivedToPath: action.to_path,
+        manifestId: input.manifestId,
+        notes: {
+          migration_slug: "light-lane-memory-recovery",
+          replacement_project: action.replacement_project,
+          replacement_target: action.replacement_target,
+          archive_path: action.to_path,
+        },
+      });
+      documentsArchived += 1;
+      if (await this.refreshArchivedVectorMetadata(document.id)) {
+        vectorMetadataRefreshed += 1;
+      }
+      const archivedDocument = await this.repo.getDocumentByPath(action.to_path);
+      if (archivedDocument) {
+        await this.repo.linkMemory({
+          project: "light-lane",
+          fromType: "document",
+          fromId: document.id,
+          toType: "document",
+          toId: archivedDocument.id,
+          relation: "archived_as",
+          metadata: {
+            migration_slug: "light-lane-memory-recovery",
+            manifest_id: input.manifestId,
+            replacement_target: action.replacement_target,
+          },
+        });
+        memoryLinksWritten += 1;
+      }
+    }
+
+    return {
+      documents_archived: documentsArchived,
+      vector_metadata_refreshed: vectorMetadataRefreshed,
+      memory_links_written: memoryLinksWritten,
+      archive_results: archiveResults,
     };
   }
 
@@ -4480,6 +4802,40 @@ function workdriveCanonicalizationManifestId(canonicalProject: string, duplicate
   return `workdrive-visible-canonicalization-${duplicateProject}-to-${canonicalProject}`;
 }
 
+function inferExistingAiBrainImport(documents: ResolvedMemoryDocument[]): LightLaneRecoveryAiBrainInput | undefined {
+  const aiBrainDocuments = documents.filter((document) =>
+    document.project === "light-lane"
+    && document.active
+    && (document.source === "ai-brain-vault" || document.tags.includes("ai-brain-vault")),
+  );
+  if (!aiBrainDocuments.length) {
+    return undefined;
+  }
+  const currentContext = aiBrainDocuments.filter((document) => document.memoryType === "current_context").length;
+  const snippets = aiBrainDocuments.filter((document) => document.memoryType === "snippet").length;
+  return {
+    counts: {
+      markdown_files: aiBrainDocuments.length,
+      current_context: currentContext,
+      snippets,
+      load_first: currentContext >= 13 ? 12 : 0,
+      high_priority: currentContext >= 13 ? 1 : 0,
+      wiki_links: aiBrainDocuments.length >= 63 ? 218 : 0,
+    },
+  };
+}
+
+function lightLaneRecoveryCounts(analysis: ReturnType<typeof buildLightLaneMemoryRecoveryAnalysis>) {
+  return {
+    misplaced_shared_documents: analysis.misplaced_shared_documents.length,
+    current_context_documents: analysis.current_context_documents.length,
+    deal_state_actions: analysis.deal_state_actions.length,
+    shared_documents_to_archive: analysis.archive_actions.length,
+    repos_to_associate: analysis.repo_actions.associate.length,
+    repos_to_index: analysis.repo_actions.index_overview.length,
+  };
+}
+
 function buildMarkdownWithExtraFrontmatter(frontmatter: Record<string, unknown>, body: string) {
   return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${body.trim()}\n`;
 }
@@ -4529,6 +4885,61 @@ function buildArchivedCanonicalizationMarkdown(input: {
       `> Canonical project: [[${input.canonicalProject}]]. No original content was deleted.`,
       "",
       parsed.body,
+    ].join("\n"),
+  );
+}
+
+function buildLightLaneRecoveryArchiveMarkdown(input: {
+  document: ResolvedMemoryDocument;
+  markdown: string;
+  action: LightLaneArchiveAction;
+  manifestId: string;
+  now: string;
+  authorClient: string;
+}) {
+  return buildMarkdownWithExtraFrontmatter(
+    {
+      id: crypto.randomUUID(),
+      title: `Archived shared current context: ${input.document.title}`,
+      project: "light-lane",
+      memory_type: "snippet",
+      status: "archived",
+      canonical: false,
+      revision: 1,
+      tags: [
+        "light-lane",
+        "memory-recovery",
+        "archived-shared-current-context",
+        input.action.replacement_target,
+      ],
+      created_at: input.now,
+      updated_at: input.now,
+      author_client: input.authorClient,
+      source: "light-lane-memory-recovery",
+      confidence: input.document.confidence,
+      usefulness: 0.2,
+      path: input.action.to_path,
+      archived_from_path: input.action.from_path,
+      archived_from_document_id: input.document.id,
+      archived_to_path: input.action.to_path,
+      canonicalization_manifest_id: input.manifestId,
+      replacement_project: input.action.replacement_project,
+      replacement_target: input.action.replacement_target,
+      wiki_links: ["[[light-lane]]", "[[Light Lane Current Sales State]]", "[[Light Lane Source Trust]]"],
+    },
+    [
+      `# Archived Shared Current Context: ${input.document.title}`,
+      "",
+      "This file preserves a former shared current-context document after the Light Lane memory recovery.",
+      "",
+      `- Original path: \`${input.action.from_path}\``,
+      `- Replacement project: \`${input.action.replacement_project}\``,
+      `- Replacement target: \`${input.action.replacement_target}\``,
+      `- Manifest: \`${input.manifestId}\``,
+      "",
+      "## Original Markdown",
+      "",
+      input.markdown.trim(),
     ].join("\n"),
   );
 }

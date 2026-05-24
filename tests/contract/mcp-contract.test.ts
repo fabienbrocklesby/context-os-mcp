@@ -403,6 +403,14 @@ vi.mock("~/domain/service", () => {
       return { dry_run: true, applied: false, analysis: { counts: { files_seen: 0 } } };
     }
 
+    async analyzeLightLaneMemoryRecovery() {
+      return { migration_slug: "light-lane-memory-recovery", quality_gates: { ready_to_apply: false } };
+    }
+
+    async runLightLaneMemoryRecovery() {
+      return { dry_run: true, applied: false, analysis: { migration_slug: "light-lane-memory-recovery" } };
+    }
+
     async upsertTask() {
       return { task: { title: "Follow up" } };
     }
@@ -530,6 +538,8 @@ describe("MCP contract", () => {
         "analyze_context_truth_migration",
         "run_context_truth_migration",
         "import_ai_brain_vault",
+        "analyze_light_lane_memory_recovery",
+        "run_light_lane_memory_recovery",
         "upsert_task",
         "daily_briefing",
         "context_health_check",

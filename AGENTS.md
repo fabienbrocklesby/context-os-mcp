@@ -1,14 +1,15 @@
 # AI Memory Operating Protocol
 
-Use the `memory` MCP server as the durable context system and source of truth for project memory.
+Use the connected MCP server named `context-os-memory` as the durable context system and source of truth for project memory. If this environment exposes the same server under the legacy namespace `memory`, use that namespace but treat it as Context OS Memory.
 
-Do not rely on Codex, ChatGPT, Claude, or app-level built-in memory as the source of truth for project facts. Durable facts, decisions, setup details, repo context, snippets, entities, tasks, reminders, source events, and session summaries must be read from and written to the `memory` MCP.
+Do not rely on Codex, ChatGPT, Claude, or app-level built-in memory as the source of truth for project facts. Durable facts, decisions, setup details, repo context, snippets, entities, entity states, tasks, reminders, source events, and session summaries must be read from and written to Context OS Memory.
 
 Important MCP availability check:
 
 - This memory server exposes MCP tools, not MCP resources or resource templates.
 - Empty `list_mcp_resources` or `list_mcp_resource_templates` results do not mean the memory server is unavailable.
 - Check for tools such as `memory.prepare_assistant_session`, `memory.resolve_context`, `memory.search_memory`, `memory.finish_work_session`, and `memory.daily_briefing`.
+- For Light Lane vault repair and ongoing governance, also check for `memory.analyze_light_lane_memory_recovery` and `memory.run_light_lane_memory_recovery`.
 - If the host UI does not show namespaced `memory.*` tools, inspect/list MCP tools rather than resources, or call `prepare_assistant_session` directly if tool calling is available.
 - Codex fallback: if `memory.*` tools are not exposed as callable tools, use the global local command `~/.codex/bin/memory-mcp`. It reads `~/.codex/config.toml` and calls the same deployed MCP server over Streamable HTTP.
   - List tools: `~/.codex/bin/memory-mcp list-tools`
@@ -39,6 +40,7 @@ Before substantive work:
    - `memory.github_search_code`
    - `memory.github_get_file`
 9. When a GitHub file or code excerpt becomes useful durable context, call `memory.github_save_file_memory` or `memory.save_snippet`.
+10. For Light Lane proposals, sales work, opportunity prioritization, or company positioning, call `memory.search_memory`, `memory.prepare_assistant_session`, or `memory.plan_request` with `task_profile: "sales_proposal"` when the tool supports it.
 
 During work:
 
@@ -51,6 +53,18 @@ During work:
 - Use `memory.record_decision` for durable architecture, deployment, product, operations, or workflow decisions.
 - Use `memory.update_context_document` only for intentional updates to canonical current-context documents.
 - Do not store raw private emails, full calendar details, private documents, large raw diffs, secrets, or sensitive personal data unless the user explicitly asks and the connector policy allows it.
+
+Light Lane memory structure rules:
+
+- The canonical Light Lane project is `light-lane`. Do not write Light Lane business, sales, product, customer, deal, or repo context into `shared` unless it is genuinely reusable across unrelated projects.
+- Light Lane current-context documents belong under `/memory/projects/light-lane/context/current/`. The required coverage is identity, offer map, full-system positioning, sales rules, objections, technical guardrails, source trust, repo map, and current sales state.
+- Do not create one-off deal markdown as current context. Current deal/account/person status must be stored as structured entity state via `memory.upsert_entity_state`, with source, confidence, observed time, and live-verification warnings when appropriate.
+- Old sessions, old deal notes, archived shared docs, and semantic chunks are background only. They must not be treated as current deal truth unless confirmed by live tools or fresh structured entity states/source events.
+- If Light Lane docs are found under `/memory/shared/context/current/`, or if `context_health_check` warns `missing_business_brain`, `required_context_sections_missing`, or `repo_coverage_incomplete`, run `memory.analyze_light_lane_memory_recovery` first. Use `memory.run_light_lane_memory_recovery` only after the dry-run manifest is understood and apply is intended.
+- The approved AI Brain vault import path is the Light Lane Sales Academy AI Brain vault. Import through `memory.import_ai_brain_vault` or `memory.run_light_lane_memory_recovery`; preserve wiki-links and write structured `memory_links`.
+- The required Light Lane repos are `Light-Lane/LightLane-Site-V2`, `Light-Lane/Light-Lane-Ruida`, `Light-Lane/Light-Lane-Portal`, `Light-Lane/LightLane-App`, `Light-Lane/Light-Lane-Ruida-CLI`, `Light-Lane/LightLane-Internal-CRM`, `Light-Lane/LightLane-Website`, and `Light-Lane/LightLane-Public-Facing-Website`. If `memory.github_project_repos` does not show all eight, associate/index the missing repos before making repo-coverage claims.
+- For proposals, the assistant must load the Light Lane business brain before drafting: entrypoint/identity, full-system positioning, sales rules, objections, technical guardrails, source trust, relevant use cases, current deal/account entity state, and repo context when product details matter.
+- If Zoho CRM/email/calendar tools are unavailable, say so clearly and avoid presenting stale deal notes as current. Use entity state and recent source events as the fallback current layer, and mark anything unverified.
 
 Production delivery protocol:
 
