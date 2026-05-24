@@ -1,0 +1,74 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "memory-system-mcp",
+	"account_id": "9f08cc5b560a2570e12982550b39f6ac",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-23",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "memory-system-mcp",
+			"database_id": "f10b955d-32f8-4c16-9704-8587c81d8e5e",
+			"preview_database_id": "2711e49a-0350-418e-8622-df37ce17a968",
+			"migrations_dir": "migrations"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "684d112815b24215a33b63eb98306394",
+			"preview_id": "484a82d040e04fed80c21ffd91b539c3"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "INDEX_QUEUE",
+				"queue": "memory-system-index-queue"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "memory-system-index-queue",
+				"max_batch_size": 25,
+				"max_batch_timeout": 5,
+				"max_retries": 3
+			}
+		]
+	},
+	"vectorize": [
+		{
+			"binding": "MEMORY_INDEX",
+			"index_name": "memory-system-index",
+			"remote": true
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"triggers": {
+		"crons": [
+			"*/30 * * * *"
+		]
+	},
+	"vars": {
+		"APP_BASE_URL": "https://memory-system-mcp.cloudflare-9f0.workers.dev",
+		"MCP_ROUTE": "/mcp",
+		"ZOHO_WORKDRIVE_API_BASE_URL": "https://www.zohoapis.com.au/workdrive/api/v1",
+		"ZOHO_ACCOUNTS_BASE_URL": "https://accounts.zoho.com.au",
+		"GITHUB_OAUTH_AUTHORIZE_URL": "https://github.com/login/oauth/authorize",
+		"GITHUB_OAUTH_TOKEN_URL": "https://github.com/login/oauth/access_token",
+		"GITHUB_OAUTH_USER_URL": "https://api.github.com/user",
+		"GITHUB_OAUTH_EMAILS_URL": "https://api.github.com/user/emails",
+		"GITHUB_API_BASE_URL": "https://api.github.com",
+		"GITHUB_OAUTH_SCOPES": "read:user user:email repo",
+		"WORKERS_AI_EMBEDDING_MODEL": "@cf/baai/bge-base-en-v1.5"
+	}
+}
