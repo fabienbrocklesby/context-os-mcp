@@ -1,4 +1,4 @@
-import type { MemorySearchHit } from "~/domain/memory";
+import { isRetrievableMemoryStatus, type MemorySearchHit } from "~/domain/memory";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -15,7 +15,7 @@ export function rerankSearchHits(
   const now = options.now ?? Date.now();
   return [...hits]
     .filter((hit) => options.includeSuperseded || !hit.superseded)
-    .filter((hit) => options.includeSuperseded || hit.active)
+    .filter((hit) => options.includeSuperseded || isRetrievableMemoryStatus(hit.status))
     .map((hit) => ({
       hit,
       rankingScore: computeRankingScore(hit, now, options),

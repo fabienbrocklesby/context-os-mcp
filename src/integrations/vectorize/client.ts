@@ -216,10 +216,10 @@ function buildFilter(filters: MemorySearchFilters): VectorizeVectorMetadataFilte
     filter.status = {
       $in: [...filters.statuses],
     };
-  }
-
-  if (filters.activeOnly) {
-    filter.active = true;
+  } else if (filters.activeOnly) {
+    filter.status = {
+      $in: ["active", "historical"],
+    };
   }
 
   if (!filters.includeSuperseded) {

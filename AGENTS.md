@@ -17,6 +17,7 @@ Important MCP availability check:
   - Resolve context: `~/.codex/bin/memory-mcp resolve_context '{"project_or_topic":"PROJECT_OR_TOPIC","user_intent":"TASK TOPIC"}'`
   - Search memory: `~/.codex/bin/memory-mcp search_memory '{"project":"PROJECT_SLUG","query":"SEARCH QUERY","scope":"project"}'`
   - Finish work: `~/.codex/bin/memory-mcp finish_work_session '{"project":"PROJECT_SLUG","title":"TITLE","summary_markdown":"SUMMARY"}'`
+- If the fallback command cannot find a Context OS Memory MCP URL and bearer token in `~/.codex/config.toml`, treat that as a local client configuration fault. Report it, verify the deployed Worker is still healthy if possible, and configure the local MCP client rather than assuming durable memory is unavailable.
 
 Before substantive work:
 
@@ -45,6 +46,8 @@ Before substantive work:
 During work:
 
 - Treat WorkDrive-backed memory as canonical project context.
+- Durable markdown writes must go to the WorkDrive/Obsidian vault first through Context OS Memory tools, then be indexed into D1 and Vectorize. Do not create D1-only or vector-only durable facts/documents as a substitute for canonical markdown unless the tool is explicitly structured-only, such as entity states, tasks, source events, or facts.
+- Historical session summaries and historical notes are retrievable background memory. They are lower priority than current context/entity state/live tools, but they must not be archived or hidden from search merely because they are historical.
 - Treat live external MCPs as the source of truth for volatile CRM/email/calendar/notes/GitHub/Shopify state.
 - Prefer project-scoped memory over shared memory when a project is clear.
 - Use shared memory only for cross-project conventions, account setup, broad operating rules, and reusable preferences.

@@ -29,6 +29,7 @@ import {
   type EntityAlias,
   type EntityState,
   inferMemoryTypeFromPath,
+  isRetrievableMemoryStatus,
   isAdminPrincipal,
   type AssistantSearchScope,
   type ContextTask,
@@ -38,6 +39,7 @@ import {
   type BranchProject,
   type MemoryType,
   type MemoryProject,
+  type MemoryStatus,
   normalizeProject,
   slugify,
   type MemoryFrontmatter,
@@ -5074,7 +5076,7 @@ export async function indexMarkdownDocument(
     project: normalizeProject(parsed.frontmatter.project),
     memoryType: parsed.frontmatter.memory_type,
     status: parsed.frontmatter.status,
-    active: parsed.frontmatter.status === "active",
+    active: isRetrievableMemoryStatus(parsed.frontmatter.status),
     superseded: parsed.frontmatter.status === "superseded",
     repo: parsed.frontmatter.repo,
     repoPath: parsed.frontmatter.path,
@@ -5103,7 +5105,7 @@ export async function indexMarkdownDocument(
     memoryType: parsed.frontmatter.memory_type,
     status: parsed.frontmatter.status,
     canonical: parsed.frontmatter.canonical,
-    active: parsed.frontmatter.status === "active",
+    active: isRetrievableMemoryStatus(parsed.frontmatter.status),
     revision: parsed.frontmatter.revision,
     source: parsed.frontmatter.source,
     sourceUrl: parsed.frontmatter.source_urls[0],
@@ -5166,11 +5168,13 @@ export async function runReconciliation(env: Env, triggerKind: "cron" | "manual"
         scannedCount += 1;
         const existing = await repo.getDocumentByWorkDriveFileId(entry.id);
         const chunkCount = existing ? await repo.getChunkCountForDocument(existing.id) : 0;
-        const isStale =
-          !existing ||
-          chunkCount === 0 ||
-          (entry.modifiedTimeMillis ?? 0) > (existing.lastRemoteModifiedAt ?? 0);
-        if (!isStale) {
+        if (
+          !shouldReindexWorkDriveEntry({
+            existing,
+            chunkCount,
+            remoteModifiedAt: entry.modifiedTimeMillis,
+          })
+        ) {
           continue;
         }
         const jobId = await repo.createReindexJob({
@@ -5223,6 +5227,23 @@ export async function runReconciliation(env: Env, triggerKind: "cron" | "manual"
     });
     throw error;
   }
+}
+
+export function shouldReindexWorkDriveEntry(input: {
+  existing?: { status: MemoryStatus; active: boolean; lastRemoteModifiedAt?: number | null } | null;
+  chunkCount: number;
+  remoteModifiedAt?: number | null;
+}) {
+  if (!input.existing) {
+    return true;
+  }
+  if (input.chunkCount === 0) {
+    return true;
+  }
+  if ((input.remoteModifiedAt ?? 0) > (input.existing.lastRemoteModifiedAt ?? 0)) {
+    return true;
+  }
+  return input.existing.active !== isRetrievableMemoryStatus(input.existing.status);
 }
 
 async function walkWorkDriveMarkdownTree(

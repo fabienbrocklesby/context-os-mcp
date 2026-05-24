@@ -43,6 +43,10 @@ export type MemoryFrontmatter = z.infer<typeof frontmatterSchema>;
 export type MemoryType = z.infer<typeof memoryTypeSchema>;
 export type MemoryStatus = z.infer<typeof memoryStatusSchema>;
 
+export function isRetrievableMemoryStatus(status: MemoryStatus) {
+  return status === "active" || status === "historical";
+}
+
 export type ParsedMarkdownDocument = {
   frontmatter: MemoryFrontmatter;
   body: string;

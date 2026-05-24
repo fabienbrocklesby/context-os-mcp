@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const downloadMarkdown = vi.fn();
 const upsertIndexedDocument = vi.fn();
@@ -49,6 +49,15 @@ vi.mock("~/integrations/vectorize/client", () => ({
 }));
 
 describe("indexing flow", () => {
+  beforeEach(() => {
+    downloadMarkdown.mockReset();
+    upsertIndexedDocument.mockReset();
+    recordSupersession.mockReset();
+    embedTexts.mockReset();
+    replaceDocumentVectors.mockReset();
+    deleteVectors.mockReset();
+  });
+
   it("orchestrates download, chunking, embeddings, vector upsert, and repository persistence", async () => {
     const { reindexWorkDriveDocument } = await import("~/domain/service");
 
@@ -145,5 +154,83 @@ Vectorize stores chunk embeddings for retrieval.`,
     );
     expect(deleteVectors).toHaveBeenCalledWith(env, []);
     expect(recordSupersession).not.toHaveBeenCalled();
+  });
+
+  it("keeps historical session summaries active for background retrieval", async () => {
+    const { reindexWorkDriveDocument } = await import("~/domain/service");
+
+    downloadMarkdown.mockResolvedValue({
+      file: {
+        id: "file-session",
+        name: "2026-05-24T00-00-00-000Z-session.md",
+        parentId: "folder-1",
+        permalink: "https://workdrive.example.com/file-session",
+        downloadUrl: "https://download.example.com/file-session",
+        modifiedTimeMillis: 1_710_000_000_000,
+      },
+      markdown: `---
+id: session-123
+title: Useful Historical Session
+project: light-lane
+memory_type: session_summary
+status: historical
+revision: 1
+tags:
+  - sales
+created_at: 2026-05-24T00:00:00.000Z
+updated_at: 2026-05-24T00:00:00.000Z
+author_client: codex
+supersedes: []
+superseded_by: []
+canonical: false
+---
+
+# Useful Historical Session
+
+This summary contains important sales context that should remain searchable as background memory.`,
+    });
+    embedTexts.mockResolvedValue([[0.1, 0.2, 0.3]]);
+    upsertIndexedDocument.mockResolvedValue({ oldVectorIds: [] });
+    replaceDocumentVectors.mockResolvedValue(undefined);
+    deleteVectors.mockResolvedValue(undefined);
+
+    const env = {
+      DB: {} as D1Database,
+      APP_BASE_URL: "https://memory.example.com",
+      MCP_ROUTE: "/mcp",
+      ZOHO_WORKDRIVE_API_BASE_URL: "https://workdrive.zoho.com/api/v1",
+      ZOHO_ACCOUNTS_BASE_URL: "https://accounts.zoho.com",
+      ZOHO_ACCESS_TOKEN: "zoho-access",
+      GITHUB_OAUTH_AUTHORIZE_URL: "https://github.com/login/oauth/authorize",
+      GITHUB_OAUTH_TOKEN_URL: "https://github.com/login/oauth/access_token",
+      GITHUB_OAUTH_USER_URL: "https://api.github.com/user",
+      GITHUB_OAUTH_EMAILS_URL: "https://api.github.com/user/emails",
+      WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
+      MEMORY_INDEX: {} as VectorizeIndex,
+      AI: {} as Ai,
+    } as Env;
+
+    await reindexWorkDriveDocument(
+      env,
+      "file-session",
+      "/memory/projects/light-lane/sessions/2026-05-24T00-00-00-000Z-session.md",
+    );
+
+    expect(replaceDocumentVectors).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        memoryType: "session_summary",
+        status: "historical",
+        active: true,
+        superseded: false,
+      }),
+    );
+    expect(upsertIndexedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryType: "session_summary",
+        status: "historical",
+        active: true,
+      }),
+    );
   });
 });

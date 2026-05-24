@@ -1133,8 +1133,7 @@ export class MemoryRepository {
       conditions.push(`(project = 'shared' OR project = ?${binds.length})`);
     }
     if (!input.includeSuperseded) {
-      conditions.push("status != 'superseded'");
-      conditions.push("active = 1");
+      conditions.push("status IN ('active', 'historical')");
     }
     if (input.memoryTypes?.length) {
       const placeholders = input.memoryTypes.map((type) => {

@@ -61,7 +61,6 @@ describe("Vectorize client", () => {
         filter: {
           memory_type: { $in: ["current_context"] },
           status: { $in: ["active"] },
-          active: true,
           superseded: false,
           repo: "owner/repo",
           source: "github",
@@ -73,6 +72,31 @@ describe("Vectorize client", () => {
     expect(hits[0]?.repo).toBe("owner/repo");
     expect(hits[0]?.tags).toEqual(["docs"]);
     expect(hits[0]?.url).toBe("https://example.com/doc");
+  });
+
+  it("filters default active-only retrieval by retrievable status rather than stale active metadata", async () => {
+    const query = vi.fn(async () => ({ matches: [] }));
+    const env = {
+      MEMORY_INDEX: {
+        query,
+      },
+    } as unknown as Env;
+
+    await queryMemoryIndex(env, [0.1, 0.2], ["light-lane"], {
+      activeOnly: true,
+      includeSuperseded: false,
+      limit: 5,
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      [0.1, 0.2],
+      expect.objectContaining({
+        filter: {
+          status: { $in: ["active", "historical"] },
+          superseded: false,
+        },
+      }),
+    );
   });
 
   it("replaces and deletes vectors through the bound index", async () => {
