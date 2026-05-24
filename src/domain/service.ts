@@ -77,6 +77,23 @@ export type IndexQueueMessage =
       requestedBy?: string;
     };
 
+type LightLaneRecoveryApplyPhase =
+  | "ai_brain"
+  | "current_context"
+  | "entity_state"
+  | "archive"
+  | "repo_associate"
+  | "repo_index";
+
+const DEFAULT_LIGHT_LANE_RECOVERY_PHASES: LightLaneRecoveryApplyPhase[] = [
+  "ai_brain",
+  "current_context",
+  "entity_state",
+  "archive",
+  "repo_associate",
+  "repo_index",
+];
+
 export class MemoryService {
   private readonly config: ReturnType<typeof loadConfig>;
   private readonly repo: MemoryRepository;
@@ -3443,6 +3460,7 @@ export class MemoryService {
     knownDealUpdates?: LightLaneKnownDealUpdate[];
     dryRun?: boolean;
     apply?: boolean;
+    applyPhases?: LightLaneRecoveryApplyPhase[];
     authorClient?: string;
   } = {}) {
     const apply = input.apply === true;
@@ -3498,7 +3516,8 @@ export class MemoryService {
     }
 
     const authorClient = input.authorClient ?? this.principal.login;
-    const aiBrainImport = input.aiBrainFiles?.length
+    const phases = new Set(input.applyPhases?.length ? input.applyPhases : DEFAULT_LIGHT_LANE_RECOVERY_PHASES);
+    const aiBrainImport = phases.has("ai_brain") && input.aiBrainFiles?.length
       ? await this.importAiBrainVault({
           project: "light-lane",
           vaultName: "AI Brain Vault",
@@ -3512,50 +3531,65 @@ export class MemoryService {
         })
       : null;
     const currentContextWritten = [];
-    for (const document of analysis.current_context_documents) {
-      currentContextWritten.push(
-        await this.updateContextDocument({
-          project: "light-lane",
-          path: document.target_path,
-          title: document.title,
-          markdown: document.markdown,
-          authorClient,
-        }),
-      );
+    if (phases.has("current_context")) {
+      for (const document of analysis.current_context_documents) {
+        currentContextWritten.push(
+          await this.updateContextDocument({
+            project: "light-lane",
+            path: document.target_path,
+            title: document.title,
+            markdown: document.markdown,
+            authorClient,
+          }),
+        );
+      }
     }
     const entityStatesWritten = [];
-    for (const action of analysis.deal_state_actions) {
-      entityStatesWritten.push(
-        await this.upsertEntityState({
-          project: "light-lane",
-          entityType: "deal",
-          entityName: action.entity_name,
-          stateKey: action.state_key,
-          value: action.value,
-          confidence: action.confidence,
-          source: action.source,
-          sourceId: analysis.migration_slug,
-          observedAt: new Date().toISOString(),
-        }),
-      );
+    if (phases.has("entity_state")) {
+      for (const action of analysis.deal_state_actions) {
+        entityStatesWritten.push(
+          await this.upsertEntityState({
+            project: "light-lane",
+            entityType: "deal",
+            entityName: action.entity_name,
+            stateKey: action.state_key,
+            value: action.value,
+            confidence: action.confidence,
+            source: action.source,
+            sourceId: analysis.migration_slug,
+            observedAt: new Date().toISOString(),
+          }),
+        );
+      }
     }
-    const archived = await this.archiveLightLaneRecoveryDocuments({
-      actions: analysis.archive_actions,
-      manifestId,
-      authorClient,
-    });
+    const archived = phases.has("archive")
+      ? await this.archiveLightLaneRecoveryDocuments({
+          actions: analysis.archive_actions,
+          manifestId,
+          authorClient,
+        })
+      : {
+          documents_archived: 0,
+          vector_metadata_refreshed: 0,
+          memory_links_written: 0,
+          archive_results: [],
+        };
     const reposAssociated = [];
-    for (const action of analysis.repo_actions.associate) {
-      reposAssociated.push(await this.associateGithubRepo(action));
+    if (phases.has("repo_associate")) {
+      for (const action of analysis.repo_actions.associate) {
+        reposAssociated.push(await this.associateGithubRepo(action));
+      }
     }
     const reposIndexed = [];
-    for (const action of analysis.repo_actions.index_overview) {
-      reposIndexed.push(
-        await this.indexGithubRepoOverview({
-          ...action,
-          authorClient,
-        }),
-      );
+    if (phases.has("repo_index")) {
+      for (const action of analysis.repo_actions.index_overview) {
+        reposIndexed.push(
+          await this.indexGithubRepoOverview({
+            ...action,
+            authorClient,
+          }),
+        );
+      }
     }
     const applyCounts = {
       ...counts,
@@ -3578,6 +3612,7 @@ export class MemoryService {
       summary: `Applied Light Lane recovery: imported AI Brain material, wrote ${currentContextWritten.length} canonical current-context docs, wrote ${entityStatesWritten.length} entity states, archived ${archived.documents_archived} shared docs, and indexed ${reposIndexed.length} repos.`,
       manifest: {
         ...analysis,
+        apply_phases: [...phases],
         apply_results: {
           ai_brain_import: aiBrainImport,
           current_context_written: currentContextWritten,

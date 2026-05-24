@@ -2011,6 +2011,14 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       inputSchema: lightLaneRecoverySchema.extend({
         dry_run: z.boolean().optional(),
         apply: z.boolean().optional(),
+        apply_phases: z.array(z.enum([
+          "ai_brain",
+          "current_context",
+          "entity_state",
+          "archive",
+          "repo_associate",
+          "repo_index",
+        ])).optional(),
         author_client: z.string().optional(),
       }),
       annotations: {
@@ -2025,6 +2033,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       known_deal_updates,
       dry_run,
       apply,
+      apply_phases,
       author_client,
     }) =>
       textResult(
@@ -2041,6 +2050,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           })),
           dryRun: dry_run,
           apply,
+          applyPhases: apply_phases,
           authorClient: author_client,
         }),
       ),

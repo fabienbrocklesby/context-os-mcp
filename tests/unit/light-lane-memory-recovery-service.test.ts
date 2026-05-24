@@ -240,6 +240,57 @@ describe("Light Lane memory recovery service", () => {
       }),
     );
   });
+
+  it("apply mode can run only selected phases for resumable production recovery", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+    const importSpy = vi.spyOn(service, "importAiBrainVault").mockResolvedValue({} as never);
+    const updateSpy = vi.spyOn(service, "updateContextDocument").mockResolvedValue({
+      path: "/memory/projects/light-lane/context/current/identity.md",
+      workdrive_file_id: "wd-1",
+      job_id: "job-1",
+    } as never);
+    const stateSpy = vi.spyOn(service, "upsertEntityState").mockResolvedValue({
+      entity: { id: "entity-1", name: "Fully Promoted Nelson" },
+      state: { id: "state-1", stateKey: "budget_status", value: "no_budget" },
+      aliases: [],
+    } as never);
+    const archiveSpy = vi.spyOn(service, "archiveLightLaneRecoveryDocuments").mockResolvedValue({
+      documents_archived: 0,
+      archive_results: [],
+    } as never);
+    const associateSpy = vi.spyOn(service, "associateGithubRepo").mockResolvedValue({} as never);
+    const indexSpy = vi.spyOn(service, "indexGithubRepoOverview").mockResolvedValue({} as never);
+
+    const result = await service.runLightLaneMemoryRecovery({
+      aiBrainFiles: makeVaultFiles(),
+      apply: true,
+      dryRun: false,
+      applyPhases: ["current_context", "entity_state"],
+      knownDealUpdates: [
+        {
+          entityName: "Fully Promoted Nelson",
+          source: "user_report",
+          states: { budget_status: "no_budget" },
+        },
+      ],
+    });
+
+    expect(result.applied).toBe(true);
+    expect(updateSpy).toHaveBeenCalledTimes(9);
+    expect(stateSpy).toHaveBeenCalled();
+    expect(importSpy).not.toHaveBeenCalled();
+    expect(archiveSpy).not.toHaveBeenCalled();
+    expect(associateSpy).not.toHaveBeenCalled();
+    expect(indexSpy).not.toHaveBeenCalled();
+    expect(result.counts).toMatchObject({
+      current_context_written: 9,
+      entity_states_written: expect.any(Number),
+      documents_archived: 0,
+      repos_associated: 0,
+      repos_indexed: 0,
+    });
+  });
 });
 
 function makeEnv() {
