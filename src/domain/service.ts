@@ -3356,7 +3356,7 @@ export class MemoryService {
           await this.saveSnippet({
             project,
             title: proposal.title,
-            markdown,
+            markdown: proposal.raw_markdown,
             tags: [...proposal.tags],
             source: "ai-brain-vault",
             path: proposal.source_path,
