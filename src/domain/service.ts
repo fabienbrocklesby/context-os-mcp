@@ -2842,6 +2842,105 @@ export class MemoryService {
     };
   }
 
+  async archiveMemoryDocument(input: {
+    documentId?: string;
+    path?: string;
+    workdriveFileId?: string;
+    archivedToPath?: string;
+    reason: string;
+    authorClient?: string;
+  }) {
+    if (!isAdminPrincipal(this.principal, this.config.adminGithubLogins)) {
+      throw new Error("archive_memory_document is restricted to administrators.");
+    }
+    const document = await this.resolveDocumentReference({
+      documentId: input.documentId,
+      path: input.path,
+      workdriveFileId: input.workdriveFileId,
+    });
+    if (!document) {
+      throw new Error("Unable to resolve a document to archive.");
+    }
+
+    const downloaded = await this.zoho.downloadMarkdown(document.workdriveFileId);
+    const parsed = parseLooseMarkdown(downloaded.markdown);
+    const now = new Date().toISOString();
+    const archivedToPath = input.archivedToPath ?? document.path;
+    const frontmatter = {
+      id: document.id,
+      title: `Archived: ${document.title}`,
+      project: document.project,
+      memory_type: document.memoryType,
+      status: "archived",
+      revision: document.revision + 1,
+      tags: [...new Set([...document.tags, "archived"])],
+      created_at: now,
+      updated_at: now,
+      author_client: input.authorClient ?? this.principal.login,
+      source: document.source ?? undefined,
+      source_urls: document.sourceUrl ? [document.sourceUrl] : [],
+      confidence: typeof document.confidence === "number" ? document.confidence : undefined,
+      usefulness: typeof document.usefulness === "number" ? document.usefulness : undefined,
+      repo: document.repo ?? undefined,
+      path: document.repoPath ?? undefined,
+      supersedes: [],
+      superseded_by: [],
+      canonical: false,
+      archived_reason: input.reason,
+      archived_from_path: document.path,
+      archived_to_path: archivedToPath,
+      original_status: document.status,
+    };
+    const markdown = buildMarkdownWithExtraFrontmatter(
+      frontmatter,
+      [
+        `# Archived: ${document.title}`,
+        "",
+        "This file is no longer active Context OS Memory.",
+        "",
+        `- Original path: \`${document.path}\``,
+        `- Replacement/archive path: \`${archivedToPath}\``,
+        `- Reason: ${input.reason}`,
+        "",
+        "## Original Content",
+        "",
+        parsed.body.trim(),
+      ].join("\n"),
+    );
+    const uploaded = await this.zoho.uploadMarkdownFile({
+      folderId: document.parentFolderId,
+      fileName: document.fileName,
+      markdown,
+      overrideExisting: true,
+    });
+    const jobId = await this.indexUploadedMarkdownAndRecordJob({
+      file: uploaded,
+      path: document.path,
+      reason: "archive memory document",
+      project: document.project,
+      documentId: document.id,
+      markdown,
+    });
+    await this.repo.markDocumentsNoncanonical({
+      documentIds: [document.id],
+      reason: input.reason,
+      status: "archived",
+      archivedToPath,
+      manifestId: "manual-archive-memory-document",
+      notes: {
+        archived_from_path: document.path,
+        archived_to_path: archivedToPath,
+      },
+    });
+    return {
+      archived: true,
+      path: document.path,
+      workdrive_file_id: uploaded.id,
+      job_id: jobId,
+      archived_to_path: archivedToPath,
+    };
+  }
+
   async reindexDocument(input: {
     documentId?: string;
     path?: string;

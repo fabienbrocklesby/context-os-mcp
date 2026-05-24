@@ -431,6 +431,10 @@ vi.mock("~/domain/service", () => {
       return { path: "/memory/shared/context/current/vision.md", workdrive_file_id: "wd-1", job_id: "job-1" };
     }
 
+    async archiveMemoryDocument() {
+      return { path: "/memory/shared/context/current/vision.md", workdrive_file_id: "wd-1", job_id: "job-1", archived: true };
+    }
+
     async recordDecision() {
       return { path: "/memory/shared/decisions/decision.md", workdrive_file_id: "wd-2", job_id: "job-2" };
     }
@@ -510,6 +514,7 @@ describe("MCP contract", () => {
         "write_session_summary",
         "save_snippet",
         "update_context_document",
+        "archive_memory_document",
         "record_decision",
         "github_find_repos",
         "github_project_repos",

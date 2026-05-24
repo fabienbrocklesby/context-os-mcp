@@ -2445,6 +2445,44 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   );
 
   server.registerTool(
+    "archive_memory_document",
+    {
+      description:
+        "Admin-only: overwrite an existing WorkDrive Markdown memory document with an archived marker, reindex it inactive, and preserve the original content inside the archived file.",
+      inputSchema: z.object({
+        document_id: z.string().optional(),
+        path: z.string().optional(),
+        workdrive_file_id: z.string().optional(),
+        archived_to_path: z.string().optional(),
+        reason: z.string().min(1),
+        author_client: z.string().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: false,
+      },
+    },
+    async ({
+      document_id,
+      path,
+      workdrive_file_id,
+      archived_to_path,
+      reason,
+      author_client,
+    }) =>
+      textResult(
+        await service.archiveMemoryDocument({
+          documentId: document_id,
+          path,
+          workdriveFileId: workdrive_file_id,
+          archivedToPath: archived_to_path,
+          reason,
+          authorClient: author_client,
+        }),
+      ),
+  );
+
+  server.registerTool(
     "record_decision",
     {
       description:
