@@ -5,6 +5,7 @@ const envSchema = z.object({
   MCP_ROUTE: z.string().default("/mcp"),
   ALLOWED_ORIGINS: z.string().optional(),
   MCP_BEARER_TOKEN: z.string().optional(),
+  MCP_EXTRA_BEARER_TOKENS: z.string().optional(),
   ADMIN_GITHUB_LOGINS: z.string().optional(),
   SESSION_SECRET: z.string().min(32).optional(),
   GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
@@ -39,6 +40,7 @@ export function loadConfig(env: Env) {
     mcpRoute: parsed.MCP_ROUTE,
     allowedOrigins: splitCsv(parsed.ALLOWED_ORIGINS),
     bearerToken: parsed.MCP_BEARER_TOKEN,
+    extraBearerTokens: splitCsv(parsed.MCP_EXTRA_BEARER_TOKENS),
     adminGithubLogins: new Set(splitCsv(parsed.ADMIN_GITHUB_LOGINS)),
     sessionSecret: parsed.SESSION_SECRET,
     github: {

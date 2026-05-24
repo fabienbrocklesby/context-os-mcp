@@ -51,6 +51,31 @@ describe("Worker MCP auth routing", () => {
     expect(oauthFetch).not.toHaveBeenCalled();
   });
 
+  it("routes matching extra bearer token requests without replacing the primary token", async () => {
+    const worker = await import("~/index");
+    const env = baseEnv({
+      MCP_BEARER_TOKEN: "existing-token",
+      MCP_EXTRA_BEARER_TOKENS: "codex-recovery-token,another-token",
+    });
+    const ctx = executionContext();
+    const expected = new Response("ok");
+    serveAuthenticatedMcpRequest.mockResolvedValue(expected);
+
+    const response = await worker.default.fetch(
+      workerRequest("https://memory.example.com/mcp", {
+        headers: {
+          authorization: "Bearer codex-recovery-token",
+        },
+      }),
+      env,
+      ctx,
+    );
+
+    expect(response).toBe(expected);
+    expect(serveAuthenticatedMcpRequest).toHaveBeenCalledOnce();
+    expect(oauthFetch).not.toHaveBeenCalled();
+  });
+
   it("normalizes text/plain OAuth failures on the MCP route to JSON", async () => {
     const worker = await import("~/index");
     const payload = {
@@ -104,7 +129,7 @@ describe("Worker MCP auth routing", () => {
   });
 });
 
-function baseEnv(overrides: Partial<Env> = {}) {
+function baseEnv(overrides: Partial<Env> & Record<string, unknown> = {}) {
   return {
     APP_BASE_URL: "https://memory.example.com",
     MCP_ROUTE: "/mcp",

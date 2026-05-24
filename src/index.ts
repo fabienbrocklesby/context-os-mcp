@@ -16,7 +16,7 @@ export default {
 
     if (
       url.pathname === config.mcpRoute &&
-      isBearerAuthorized(request, config.bearerToken)
+      isBearerAuthorized(request, [config.bearerToken, ...config.extraBearerTokens])
     ) {
       const { serveAuthenticatedMcpRequest } = await import("~/mcp/server");
       return serveAuthenticatedMcpRequest(request, env, ctx, BEARER_PRINCIPAL);
@@ -46,12 +46,9 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function isBearerAuthorized(request: Request, bearerToken?: string) {
-  if (!bearerToken) {
-    return false;
-  }
+function isBearerAuthorized(request: Request, bearerTokens: Array<string | undefined>) {
   const header = request.headers.get("authorization");
-  return header === `Bearer ${bearerToken}`;
+  return bearerTokens.some((token) => token && header === `Bearer ${token}`);
 }
 
 async function normalizeMcpAuthErrorResponse(response: Response) {
