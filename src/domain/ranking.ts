@@ -15,6 +15,7 @@ export function rerankSearchHits(
   const now = options.now ?? Date.now();
   return [...hits]
     .filter((hit) => options.includeSuperseded || !hit.superseded)
+    .filter((hit) => options.includeSuperseded || hit.active)
     .map((hit) => ({
       hit,
       rankingScore: computeRankingScore(hit, now, options),

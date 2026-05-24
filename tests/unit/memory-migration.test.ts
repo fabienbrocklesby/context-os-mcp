@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   linkMemory: vi.fn(),
   saveSourceEvent: vi.fn(),
   listMigrationAuditEvents: vi.fn(),
+  recordWorkdriveCanonicalizationManifest: vi.fn(),
+  listWorkdriveCanonicalizationManifests: vi.fn(),
 }));
 
 vi.mock("~/integrations/workers-ai/embeddings", () => ({
@@ -69,6 +71,14 @@ vi.mock("~/persistence/d1/repository", () => ({
     listMigrationAuditEvents(input: unknown) {
       return mocks.listMigrationAuditEvents(input);
     }
+
+    recordWorkdriveCanonicalizationManifest(input: unknown) {
+      return mocks.recordWorkdriveCanonicalizationManifest(input);
+    }
+
+    listWorkdriveCanonicalizationManifests(input: unknown) {
+      return mocks.listWorkdriveCanonicalizationManifests(input);
+    }
   },
 }));
 
@@ -98,6 +108,8 @@ describe("memory migration analysis and dry-run", () => {
     mocks.linkMemory.mockResolvedValue([]);
     mocks.saveSourceEvent.mockResolvedValue(undefined);
     mocks.listMigrationAuditEvents.mockResolvedValue([]);
+    mocks.recordWorkdriveCanonicalizationManifest.mockResolvedValue("manifest-1");
+    mocks.listWorkdriveCanonicalizationManifests.mockResolvedValue([]);
   });
 
   it("detects light-lane/lightlane duplicate and defaults run to dry-run", async () => {
@@ -142,6 +154,61 @@ describe("memory migration analysis and dry-run", () => {
       expect.objectContaining({ eventType: "memory_reconciliation" }),
     );
   });
+
+  it("builds a WorkDrive-visible canonicalization manifest and records dry-run without copying files", async () => {
+    mocks.listProjects.mockResolvedValue([
+      makeProject("light-lane", "Light Lane", { workdriveRootFolderId: "canonical-root" }),
+      makeProject("lightlane", "Lightlane", {
+        workdriveRootFolderId: "duplicate-root",
+        canonicalStatus: "merged",
+        mergedIntoProject: "light-lane",
+      }),
+      makeProject("shared", "Shared Memory", { shared: true }),
+    ]);
+    mocks.listAllDocuments.mockResolvedValue([
+      makeDocument({
+        id: "duplicate-doc",
+        project: "lightlane",
+        path: "/memory/projects/lightlane/context/current/overview.md",
+        fileName: "overview.md",
+      }),
+      makeDocument({
+        id: "shared-dup",
+        project: "shared",
+        path: "/memory/shared/context/current/light-lane-current-context 25-04-2026 12:29:46:885.md",
+        fileName: "light-lane-current-context 25-04-2026 12:29:46:885.md",
+      }),
+      makeDocument({
+        id: "canonical",
+        project: "light-lane",
+        path: "/memory/projects/light-lane/context/current/overview.md",
+        fileName: "overview.md",
+      }),
+    ]);
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const analysis = await service.analyzeWorkdriveCanonicalization();
+
+    expect(analysis.manifest.archive_copies).toEqual([
+      expect.objectContaining({
+        from_path: "/memory/projects/lightlane/context/current/overview.md",
+        to_path: "/memory/projects/light-lane/_merged/lightlane/context/current/overview.md",
+      }),
+    ]);
+    expect(analysis.manifest.shared_archive_copies).toHaveLength(1);
+    expect(analysis.manifest.redirect_files).toHaveLength(2);
+    expect(analysis.manifest.safety.deletes_workdrive_files).toBe(false);
+
+    const dryRun = await service.runWorkdriveCanonicalization();
+    expect(dryRun.applied).toBe(false);
+    expect(mocks.recordWorkdriveCanonicalizationManifest).toHaveBeenCalledWith(
+      expect.objectContaining({ dryRun: true, status: "dry_run" }),
+    );
+    expect(mocks.updateProjectProfile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "archived" }),
+    );
+  });
 });
 
 function makeEnv() {
@@ -169,7 +236,7 @@ function makePrincipal(): MemoryPrincipal {
   };
 }
 
-function makeProject(slug: string, displayName: string): MemoryProject {
+function makeProject(slug: string, displayName: string, overrides: Partial<MemoryProject> = {}): MemoryProject {
   return {
     slug,
     displayName,
@@ -186,8 +253,14 @@ function makeProject(slug: string, displayName: string): MemoryProject {
     snippetsFolderId: null,
     repoIndexFolderId: null,
     lastHealth: null,
+    canonicalProject: null,
+    mergedIntoProject: null,
+    noncanonicalReason: null,
+    canonicalStatus: "canonical",
+    canonicalUpdatedAt: null,
     createdAt: "2026-04-01T00:00:00.000Z",
     updatedAt: "2026-05-01T00:00:00.000Z",
+    ...overrides,
   };
 }
 

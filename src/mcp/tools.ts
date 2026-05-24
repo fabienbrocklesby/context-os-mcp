@@ -7,7 +7,7 @@ import type { MemoryPrincipal } from "~/domain/memory";
 export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   const service = new MemoryService(env, principal);
   const server = new McpServer({
-    name: "memory-system-mcp",
+    name: "context-os-memory",
     version: "0.1.0",
   });
   const businessHoursSchema = z.object({
@@ -15,6 +15,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     end: z.string().optional(),
     business_days: z.array(z.number().int().min(1).max(7)).optional(),
   });
+  const taskProfileSchema = z.enum(["sales_proposal", "code_repo", "daily_priority", "general"]);
   const strategyNodeTypeSchema = z.enum(["vision", "north_star", "strategic_pillar", "outcome"]);
   const strategyStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
   const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
@@ -41,6 +42,19 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     "manual",
     "other",
   ]);
+  const entityTypeToolSchema = z.enum([
+    "person",
+    "company",
+    "account",
+    "store",
+    "repo",
+    "product",
+    "supplier",
+    "deal",
+    "project",
+    "other",
+  ]);
+  const entityStateStatusToolSchema = z.enum(["active", "superseded", "archived"]);
   const sensitivitySchema = z.enum(["public", "internal", "confidential", "sensitive"]);
   const savePolicySchema = z.enum(["durable_summary", "live_only", "requires_approval"]);
   const capabilityAvailabilitySchema = z.enum(["available", "unavailable", "unknown", "user_configured"]);
@@ -107,13 +121,17 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     "list_projects",
     {
       description: "List memory projects known to D1.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        include_merged: z.boolean().optional(),
+        include_archived: z.boolean().optional(),
+      }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async () => textResult(await service.listProjects()),
+    async ({ include_merged, include_archived }) =>
+      textResult(await service.listProjects({ includeMerged: include_merged, includeArchived: include_archived })),
   );
 
   server.registerTool(
@@ -197,6 +215,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         now: z.string().optional(),
         business_hours: businessHoursSchema.optional(),
         authoritative: z.boolean().optional(),
+        task_profile: taskProfileSchema.optional(),
       }),
       annotations: {
         idempotentHint: true,
@@ -212,6 +231,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       now,
       business_hours,
       authoritative,
+      task_profile,
     }) =>
       textResult(
         await service.prepareAssistantSession({
@@ -224,6 +244,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           now,
           businessHours: business_hours,
           authoritative,
+          taskProfile: task_profile,
         }),
       ),
   );
@@ -931,6 +952,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         scope: z.enum(["project", "initiative", "entity", "all_related"]).optional(),
         initiative: z.string().optional(),
         entity_id: z.string().optional(),
+        task_profile: taskProfileSchema.optional(),
       }),
       annotations: {
         readOnlyHint: true,
@@ -951,6 +973,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       scope,
       initiative,
       entity_id,
+      task_profile,
     }) => textResult(
       await service.searchMemory({
         query,
@@ -966,6 +989,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         scope,
         initiative,
         entityId: entity_id,
+        taskProfile: task_profile,
       }),
     ),
   );
@@ -1544,6 +1568,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         include_memory: z.boolean().optional(),
         include_assets: z.boolean().optional(),
         include_active_tasks: z.boolean().optional(),
+        task_profile: taskProfileSchema.optional(),
       }),
       annotations: {
         readOnlyHint: true,
@@ -1562,6 +1587,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       include_memory,
       include_assets,
       include_active_tasks,
+      task_profile,
     }) =>
       textResult(
         await service.planRequest({
@@ -1576,6 +1602,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           includeMemory: include_memory,
           includeAssets: include_assets,
           includeActiveTasks: include_active_tasks,
+          taskProfile: task_profile,
         }),
       ),
   );
@@ -1707,6 +1734,222 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           initiativeId: initiative_id,
           entityId: entity_id,
           save,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "upsert_entity_state",
+    {
+      description:
+        "Create or update a structured current-state record for an entity. Supersedes the prior active value for the same entity/state key without deleting history.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        entity_id: z.string().optional(),
+        entity_type: entityTypeToolSchema.optional(),
+        entity_name: z.string().optional(),
+        entity_slug: z.string().optional(),
+        entity_summary: z.string().nullable().optional(),
+        aliases: z.array(z.string()).optional(),
+        state_key: z.string().min(1),
+        value: z.unknown(),
+        confidence: z.number().min(0).max(1).nullable().optional(),
+        source: z.string().nullable().optional(),
+        source_id: z.string().nullable().optional(),
+        source_event_id: z.string().nullable().optional(),
+        valid_from: z.string().nullable().optional(),
+        valid_until: z.string().nullable().optional(),
+        observed_at: z.string().nullable().optional(),
+        status: entityStateStatusToolSchema.optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      project,
+      entity_id,
+      entity_type,
+      entity_name,
+      entity_slug,
+      entity_summary,
+      aliases,
+      state_key,
+      value,
+      confidence,
+      source,
+      source_id,
+      source_event_id,
+      valid_from,
+      valid_until,
+      observed_at,
+      status,
+    }) =>
+      textResult(
+        await service.upsertEntityState({
+          project,
+          entityId: entity_id,
+          entityType: entity_type,
+          entityName: entity_name,
+          entitySlug: entity_slug,
+          entitySummary: entity_summary,
+          aliases,
+          stateKey: state_key,
+          value,
+          confidence,
+          source,
+          sourceId: source_id,
+          sourceEventId: source_event_id,
+          validFrom: valid_from,
+          validUntil: valid_until,
+          observedAt: observed_at,
+          status,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_entity_current_state",
+    {
+      description:
+        "Fetch active structured current-state values for an entity by id or query, optionally including superseded history.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        entity_id: z.string().optional(),
+        query: z.string().optional(),
+        include_superseded: z.boolean().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, entity_id, query, include_superseded }) =>
+      textResult(
+        await service.getEntityCurrentState({
+          project,
+          entityId: entity_id,
+          query,
+          includeSuperseded: include_superseded,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "resolve_current_truth",
+    {
+      description:
+        "Resolve exact entity aliases, active entity states, stale-memory guardrails, and required live checks for a current-state query.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        query: z.string().min(1),
+        include_superseded: z.boolean().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, query, include_superseded, limit }) =>
+      textResult(
+        await service.resolveCurrentTruth({
+          project,
+          query,
+          includeSuperseded: include_superseded,
+          limit,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "analyze_context_truth_migration",
+    {
+      description:
+        "Dry-run analysis for Context Truth Engine migration. Counts existing docs/entities/facts and proposes non-destructive alias/state review actions.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project }) => textResult(await service.analyzeContextTruthMigration({ project })),
+  );
+
+  server.registerTool(
+    "run_context_truth_migration",
+    {
+      description:
+        "Run the non-destructive Context Truth Engine migration. Defaults to dry-run unless apply=true and dry_run=false.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        dry_run: z.boolean().optional(),
+        apply: z.boolean().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, dry_run, apply }) =>
+      textResult(await service.runContextTruthMigration({ project, dryRun: dry_run, apply })),
+  );
+
+  server.registerTool(
+    "import_ai_brain_vault",
+    {
+      description:
+        "Import an approved AI Brain/Obsidian vault payload as structured memory. The deployed server accepts client-supplied files and defaults to dry-run.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        vault_name: z.string().optional(),
+        files: z.array(z.object({
+          path: z.string().min(1),
+          markdown: z.string(),
+        })),
+        manifest: z.record(z.string(), z.unknown()).optional(),
+        retrieval_map: z.record(z.string(), z.unknown()).optional(),
+        dry_run: z.boolean().optional(),
+        apply: z.boolean().optional(),
+        preserve_wikilinks: z.boolean().optional(),
+        apply_links: z.boolean().optional(),
+        current_context_priorities: z.array(z.string()).optional(),
+        author_client: z.string().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      project,
+      vault_name,
+      files,
+      manifest,
+      retrieval_map,
+      dry_run,
+      apply,
+      preserve_wikilinks,
+      apply_links,
+      current_context_priorities,
+      author_client,
+    }) =>
+      textResult(
+        await service.importAiBrainVault({
+          project,
+          vaultName: vault_name,
+          files,
+          manifest,
+          retrievalMap: retrieval_map,
+          dryRun: dry_run,
+          apply,
+          preserveWikilinks: preserve_wikilinks,
+          applyLinks: apply_links,
+          currentContextPriorities: current_context_priorities,
+          authorClient: author_client,
         }),
       ),
   );
@@ -2295,6 +2538,86 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     },
     async ({ migration_slug, limit }) =>
       textResult(await service.getMigrationAudit({ migrationSlug: migration_slug, limit })),
+  );
+
+  server.registerTool(
+    "analyze_workdrive_canonicalization",
+    {
+      description:
+        "Read-only WorkDrive/Obsidian-visible canonicalization analysis. Produces a manifest for archive-copy, redirect, D1 marker, graph link, and reindex actions without writing.",
+      inputSchema: z.object({
+        canonical_project: z.string().optional(),
+        duplicate_project: z.string().optional(),
+        include_shared_duplicates: z.boolean().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ canonical_project, duplicate_project, include_shared_duplicates }) =>
+      textResult(
+        await service.analyzeWorkdriveCanonicalization({
+          canonicalProject: canonical_project,
+          duplicateProject: duplicate_project,
+          includeSharedDuplicates: include_shared_duplicates,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "run_workdrive_canonicalization",
+    {
+      description:
+        "Run second-phase non-destructive WorkDrive-visible canonicalization. Defaults to dry-run; apply=true archive-copies Markdown, writes redirect files, marks duplicate docs archived, refreshes vector metadata inactive, and audits everything.",
+      inputSchema: z.object({
+        canonical_project: z.string().optional(),
+        duplicate_project: z.string().optional(),
+        dry_run: z.boolean().optional(),
+        apply: z.boolean().optional(),
+        include_shared_duplicates: z.boolean().optional(),
+      }),
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ canonical_project, duplicate_project, dry_run, apply, include_shared_duplicates }) =>
+      textResult(
+        await service.runWorkdriveCanonicalization({
+          canonicalProject: canonical_project,
+          duplicateProject: duplicate_project,
+          dryRun: dry_run,
+          apply,
+          includeSharedDuplicates: include_shared_duplicates,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_workdrive_canonicalization_manifest",
+    {
+      description: "List recorded WorkDrive-visible canonicalization manifests and apply results.",
+      inputSchema: z.object({
+        migration_slug: z.string().optional(),
+        canonical_project: z.string().optional(),
+        duplicate_project: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ migration_slug, canonical_project, duplicate_project, limit }) =>
+      textResult(
+        await service.getWorkdriveCanonicalizationManifest({
+          migrationSlug: migration_slug,
+          canonicalProject: canonical_project,
+          duplicateProject: duplicate_project,
+          limit,
+        }),
+      ),
   );
 
   server.registerTool(

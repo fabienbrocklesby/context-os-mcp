@@ -2,6 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MemoryPrincipal, MemoryProject } from "~/domain/memory";
 
+const LIGHT_LANE_REPOS = [
+  "Light-Lane/LightLane-Site-V2",
+  "Light-Lane/Light-Lane-Ruida",
+  "Light-Lane/Light-Lane-Portal",
+  "Light-Lane/LightLane-App",
+  "Light-Lane/Light-Lane-Ruida-CLI",
+  "Light-Lane/LightLane-Internal-CRM",
+  "Light-Lane/LightLane-Website",
+  "Light-Lane/LightLane-Public-Facing-Website",
+];
+
 const mocks = vi.hoisted(() => ({
   embedTexts: vi.fn(),
   queryMemoryIndex: vi.fn(),
@@ -301,6 +312,51 @@ describe("MemoryService assistant session reliability planning", () => {
       ]),
     });
   });
+
+  it("adds the Light Lane sales proposal context pack and quality gates to plan_request", async () => {
+    const lightLane = makeProject({ slug: "light-lane", displayName: "Light Lane" });
+    mocks.getProject.mockResolvedValue(lightLane);
+    mocks.listProjects.mockResolvedValue([lightLane]);
+    mocks.listCurrentContextDocuments.mockResolvedValue([
+      { title: "Light Lane Core Identity", path: "identity.md", tags: ["identity"] },
+      { title: "Light Lane Offer Map", path: "offer-map.md", tags: ["offer-map"] },
+      { title: "Full System Positioning", path: "positioning.md", tags: ["full-system-positioning"] },
+      { title: "Sales Rules and Core Sales Thesis", path: "sales.md", tags: ["sales-rules"] },
+      { title: "Objections and Answers", path: "objections.md", tags: ["objections"] },
+      {
+        title: "Technical Guardrails and Claim Boundaries",
+        path: "guardrails.md",
+        tags: ["technical-guardrails", "claim-boundaries"],
+      },
+      { title: "Source Trust", path: "source-trust.md", tags: ["source-trust"] },
+      { title: "Light Lane Repo Map", path: "repo-map.md", tags: ["repo-map"] },
+      { title: "Current Sales State", path: "current-sales-state.md", tags: ["current-sales-state"] },
+    ]);
+    mocks.listProjectGithubRepos.mockResolvedValue(
+      LIGHT_LANE_REPOS.map((repoFullName) => ({ repoFullName })),
+    );
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.planRequest({
+      projectOrTopic: "light-lane",
+      userIntent: "Write a HamiltonJet proposal that sells the full Light Lane system.",
+      includeMemory: false,
+      taskProfile: "sales_proposal",
+    });
+
+    expect(result.task_profile).toBe("sales_proposal");
+    expect(result.required_context_pack.required_documents).toEqual(
+      expect.arrayContaining(["full-system-positioning", "core-sales-thesis", "claim-boundaries"]),
+    );
+    expect(result.context_completeness.missing_sections).toEqual([]);
+    expect(result.repo_coverage.complete).toBe(true);
+    expect(result.memory_quality_gates).toMatchObject({
+      required_context_coverage: true,
+      repo_coverage: true,
+      business_brain_loaded: true,
+    });
+  });
 });
 
 function makeEnv() {
@@ -328,7 +384,7 @@ function makePrincipal(): MemoryPrincipal {
   };
 }
 
-function makeProject(): MemoryProject {
+function makeProject(overrides: Partial<MemoryProject> = {}): MemoryProject {
   return {
     slug: "memory-system-mcp",
     displayName: "Memory System MCP",
@@ -347,5 +403,6 @@ function makeProject(): MemoryProject {
     lastHealth: null,
     createdAt: "2026-05-01T00:00:00.000Z",
     updatedAt: "2026-05-01T00:00:00.000Z",
+    ...overrides,
   };
 }

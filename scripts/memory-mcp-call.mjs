@@ -69,19 +69,32 @@ try {
 function readMemoryMcpConfig() {
   const configPath = `${os.homedir()}/.codex/config.toml`;
   const config = fs.readFileSync(configPath, "utf8");
-  const block =
-    config.match(/\[mcp_servers\.memory\][\s\S]*?(?=\n\[|\s*$)/)?.[0] ?? "";
-  const url = block.match(/url\s*=\s*"([^"]+)"/)?.[1];
-  const token =
-    block.match(/bearer_token\s*=\s*"([^"]+)"/)?.[1] ??
-    block.match(/bearer_token_env_var\s*=\s*"([^"]+)"/)?.[1];
+  const candidates = ["context_os_memory", "context-os-memory", "memory"];
 
-  if (!url || !token) {
-    throw new Error(
-      `Could not find mcp_servers.memory url and bearer token in ${configPath}.`,
-    );
+  for (const name of candidates) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const block =
+      config.match(new RegExp(`\\[mcp_servers\\.${escapedName}\\][\\s\\S]*?(?=\\n\\[|\\s*$)`))?.[0] ??
+      "";
+    const headerBlock =
+      config.match(
+        new RegExp(`\\[mcp_servers\\.${escapedName}\\.http_headers\\][\\s\\S]*?(?=\\n\\[|\\s*$)`),
+      )?.[0] ?? "";
+    const url = block.match(/url\s*=\s*"([^"]+)"/)?.[1];
+    const envVar = block.match(/bearer_token_env_var\s*=\s*"([^"]+)"/)?.[1];
+    const token =
+      block.match(/bearer_token\s*=\s*"([^"]+)"/)?.[1] ??
+      (envVar ? process.env[envVar] : undefined) ??
+      headerBlock.match(/Authorization\s*=\s*"Bearer\s+([^"]+)"/)?.[1];
+
+    if (url && token) {
+      return { url, token };
+    }
   }
-  return { url, token };
+
+  throw new Error(
+    `Could not find context_os_memory or memory MCP url and Authorization bearer token in ${configPath}.`,
+  );
 }
 
 function parseJsonArgs(raw) {
