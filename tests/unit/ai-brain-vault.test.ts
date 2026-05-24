@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeAiBrainVaultPayload,
   buildAiBrainImportMarkdown,
+  buildAiBrainSnippetImportMarkdown,
 } from "~/domain/ai-brain-vault";
 
 function makeVaultFiles() {
@@ -118,5 +119,37 @@ describe("buildAiBrainImportMarkdown", () => {
     expect(markdown).toContain("https://example.com/source");
     expect(markdown).toContain("wiki_links:");
     expect(markdown).toContain("- Other");
+  });
+});
+
+describe("buildAiBrainSnippetImportMarkdown", () => {
+  it("normalizes invalid source frontmatter while staying stable for dedupe", () => {
+    const analysis = analyzeAiBrainVaultPayload({
+      project: "light-lane",
+      vaultName: "AI Brain Vault",
+      files: [
+        {
+          path: "03 Sales Angles/Software Modernisation Angle.md",
+          markdown:
+            "---\nstable_id: ll-ai-software-modernisation-angle\nstatus: draft\npriority: normal\n---\n# Software Modernisation Angle\n\nUse this angle.",
+        },
+      ],
+    });
+
+    const first = buildAiBrainSnippetImportMarkdown({
+      proposal: analysis.proposed_documents[0]!,
+      vaultName: analysis.vault_name,
+      project: "light-lane",
+    });
+    const second = buildAiBrainSnippetImportMarkdown({
+      proposal: analysis.proposed_documents[0]!,
+      vaultName: analysis.vault_name,
+      project: "light-lane",
+    });
+
+    expect(first).toBe(second);
+    expect(first).toContain("status: active");
+    expect(first).toContain("stable_id: ll-ai-software-modernisation-angle");
+    expect(first).not.toContain("status: draft");
   });
 });

@@ -3,6 +3,7 @@ import YAML from "yaml";
 import {
   analyzeAiBrainVaultPayload as analyzeAiBrainVaultPayloadV2,
   buildAiBrainImportMarkdown as buildAiBrainImportMarkdownV2,
+  buildAiBrainSnippetImportMarkdown as buildAiBrainSnippetImportMarkdownV2,
 } from "~/domain/ai-brain-vault";
 import { buildAssistantActionPlan } from "~/domain/assistant-planning";
 import { chunkMarkdown } from "~/domain/chunking";
@@ -3356,7 +3357,11 @@ export class MemoryService {
           await this.saveSnippet({
             project,
             title: proposal.title,
-            markdown: proposal.raw_markdown,
+            markdown: buildAiBrainSnippetImportMarkdownV2({
+              proposal,
+              vaultName: analysis.vault_name,
+              project,
+            }),
             tags: [...proposal.tags],
             source: "ai-brain-vault",
             path: proposal.source_path,

@@ -250,6 +250,34 @@ export function buildAiBrainImportMarkdown(input: {
   return buildMarkdownWithExtraFrontmatter(frontmatter, body);
 }
 
+export function buildAiBrainSnippetImportMarkdown(input: {
+  proposal: AiBrainVaultDocumentProposal;
+  vaultName: string;
+  project: string;
+}) {
+  const body = parseLooseMarkdown(input.proposal.raw_markdown).body;
+  const frontmatter = {
+    title: input.proposal.title,
+    project: input.project,
+    memory_type: "snippet",
+    status: "active",
+    tags: input.proposal.tags,
+    source: "ai-brain-vault",
+    source_urls: input.proposal.source_urls,
+    confidence: 0.8,
+    usefulness: input.proposal.priority === "load-first" ? 1 : 0.85,
+    path: input.proposal.source_path,
+    supersedes: [],
+    superseded_by: [],
+    canonical: false,
+    stable_id: input.proposal.stable_id,
+    ai_brain_vault: input.vaultName,
+    ai_brain_priority: input.proposal.priority,
+    ...(input.proposal.preserve_wikilinks ? { wiki_links: input.proposal.wiki_links } : {}),
+  };
+  return buildMarkdownWithExtraFrontmatter(frontmatter, body);
+}
+
 export function parseLooseMarkdown(markdown: string) {
   const match = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
   if (!match) {
