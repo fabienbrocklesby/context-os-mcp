@@ -4956,7 +4956,7 @@ function buildLightLaneRecoveryArchiveMarkdown(input: {
       updated_at: input.now,
       author_client: input.authorClient,
       source: "light-lane-memory-recovery",
-      confidence: input.document.confidence,
+      confidence: input.document.confidence ?? 0.5,
       usefulness: 0.2,
       path: input.action.to_path,
       archived_from_path: input.action.from_path,
