@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
-import fs from "node:fs";
-import os from "node:os";
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { readMemoryMcpConfig } from "./memory-mcp-config.mjs";
 
 const usage = `Usage:
   memory-mcp list-tools
@@ -64,37 +62,6 @@ try {
   }
 } finally {
   await client.close();
-}
-
-function readMemoryMcpConfig() {
-  const configPath = `${os.homedir()}/.codex/config.toml`;
-  const config = fs.readFileSync(configPath, "utf8");
-  const candidates = ["context_os_memory", "context-os-memory", "memory"];
-
-  for (const name of candidates) {
-    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const block =
-      config.match(new RegExp(`\\[mcp_servers\\.${escapedName}\\][\\s\\S]*?(?=\\n\\[|\\s*$)`))?.[0] ??
-      "";
-    const headerBlock =
-      config.match(
-        new RegExp(`\\[mcp_servers\\.${escapedName}\\.http_headers\\][\\s\\S]*?(?=\\n\\[|\\s*$)`),
-      )?.[0] ?? "";
-    const url = block.match(/url\s*=\s*"([^"]+)"/)?.[1];
-    const envVar = block.match(/bearer_token_env_var\s*=\s*"([^"]+)"/)?.[1];
-    const token =
-      block.match(/bearer_token\s*=\s*"([^"]+)"/)?.[1] ??
-      (envVar ? process.env[envVar] : undefined) ??
-      headerBlock.match(/Authorization\s*=\s*"Bearer\s+([^"]+)"/)?.[1];
-
-    if (url && token) {
-      return { url, token };
-    }
-  }
-
-  throw new Error(
-    `Could not find context_os_memory or memory MCP url and Authorization bearer token in ${configPath}.`,
-  );
 }
 
 function parseJsonArgs(raw) {

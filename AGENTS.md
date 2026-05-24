@@ -17,6 +17,7 @@ Important MCP availability check:
   - Resolve context: `~/.codex/bin/memory-mcp resolve_context '{"project_or_topic":"PROJECT_OR_TOPIC","user_intent":"TASK TOPIC"}'`
   - Search memory: `~/.codex/bin/memory-mcp search_memory '{"project":"PROJECT_SLUG","query":"SEARCH QUERY","scope":"project"}'`
   - Finish work: `~/.codex/bin/memory-mcp finish_work_session '{"project":"PROJECT_SLUG","title":"TITLE","summary_markdown":"SUMMARY"}'`
+- Preferred local fallback auth is `bearer_token_file = "~/.codex/secrets/context_os_memory_token"` under `[mcp_servers.context_os_memory]`. Keep the token file chmod `600`; never commit bearer tokens or paste them into session summaries.
 - If the fallback command cannot find a Context OS Memory MCP URL and bearer token in `~/.codex/config.toml`, treat that as a local client configuration fault. Report it, verify the deployed Worker is still healthy if possible, and configure the local MCP client rather than assuming durable memory is unavailable.
 
 Before substantive work:

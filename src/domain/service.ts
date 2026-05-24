@@ -5272,6 +5272,7 @@ export async function runReconciliation(env: Env, triggerKind: "cron" | "manual"
             existing,
             chunkCount,
             remoteModifiedAt: entry.modifiedTimeMillis,
+            remotePath: entry.path,
           })
         ) {
           continue;
@@ -5329,11 +5330,22 @@ export async function runReconciliation(env: Env, triggerKind: "cron" | "manual"
 }
 
 export function shouldReindexWorkDriveEntry(input: {
-  existing?: { status: MemoryStatus; active: boolean; lastRemoteModifiedAt?: number | null } | null;
+  existing?:
+    | {
+        path?: string | null;
+        status: MemoryStatus;
+        active: boolean;
+        lastRemoteModifiedAt?: number | null;
+      }
+    | null;
   chunkCount: number;
   remoteModifiedAt?: number | null;
+  remotePath?: string | null;
 }) {
   if (!input.existing) {
+    return true;
+  }
+  if (input.remotePath && input.existing.path && input.existing.path !== input.remotePath) {
     return true;
   }
   if (input.chunkCount === 0) {
