@@ -57,4 +57,33 @@ describe("environment capability planning", () => {
     );
     expect(guidance.fallback_plan.join("\n")).toContain("github");
   });
+
+  it("recognizes read-only Light Lane Zoho MCP aliases for live business reads", () => {
+    for (const sourceKind of ["zoho_crm", "zoho_mail", "calendar", "workdrive"]) {
+      expect(
+        isToolAvailable("zoho_mcp_readonly", sourceKind, ["LightLane-ReadOnly Zoho MCP"]),
+      ).toBe(true);
+    }
+  });
+
+  it("plans Light Lane read-only Zoho checks without granting ContextOS write authority", () => {
+    const guidance = planEnvironmentToolUse({
+      environment: "codex",
+      userIntent: "Check Light Lane deal status and recent email reply",
+      availableTools: ["Context OS Memory", "LightLane-ReadOnly Zoho MCP"],
+      activeSources: ["zoho_crm", "zoho_mail"],
+    });
+
+    expect(guidance.unavailable_required_capabilities).toEqual([]);
+    expect(guidance.available_capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ capability: "zoho_crm_live" }),
+        expect.objectContaining({ capability: "zoho_mail_live" }),
+      ]),
+    );
+    expect(guidance.contextos_can_execute).not.toContain("zoho_crm_live");
+    expect(guidance.client_must_execute).toEqual(
+      expect.arrayContaining(["zoho_crm_live", "zoho_mail_live"]),
+    );
+  });
 });

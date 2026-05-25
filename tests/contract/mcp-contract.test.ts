@@ -160,6 +160,22 @@ vi.mock("~/domain/service", () => {
       };
     }
 
+    planLightLaneLiveStateRefresh() {
+      return {
+        eligible: true,
+        mode: "read_only_live_refresh",
+        required_source_kinds: ["zoho_crm", "zoho_mail"],
+      };
+    }
+
+    planZohoExternalWrite() {
+      return {
+        contextos_can_execute: false,
+        delegate_to: "write_capable_zoho_mcp",
+        confirmation_required: true,
+      };
+    }
+
     async analyzeMemoryMigration() {
       return { dry_run: true, duplicate_projects: [], safety: { deletes_workdrive_files: false } };
     }
@@ -507,6 +523,8 @@ describe("MCP contract", () => {
         "list_environment_capabilities",
         "upsert_environment_capability",
         "plan_environment_tool_use",
+        "plan_light_lane_live_state_refresh",
+        "plan_zoho_external_write",
         "resolve_context",
         "search_memory",
         "get_document",
@@ -565,6 +583,12 @@ describe("MCP contract", () => {
     );
     expect(
       listed.tools.find((tool) => tool.name === "search")?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(
+      listed.tools.find((tool) => tool.name === "plan_light_lane_live_state_refresh")?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(
+      listed.tools.find((tool) => tool.name === "plan_zoho_external_write")?.annotations?.readOnlyHint,
     ).toBe(true);
     expect(
       listed.tools.find((tool) => tool.name === "write_session_summary")?.annotations?.destructiveHint,

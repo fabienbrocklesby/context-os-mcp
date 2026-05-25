@@ -28,6 +28,19 @@ export function isMemoryToolSignal(tool: string) {
     normalized.includes("contextos");
 }
 
+function hasReadOnlyZohoSignal(normalizedTools: Set<string>) {
+  return [
+    "lightlane_readonly_zoho_mcp",
+    "light_lane_readonly_zoho_mcp",
+    "lightlane_read_only_zoho_mcp",
+    "light_lane_read_only_zoho_mcp",
+    "zoho_mcp_readonly",
+    "zoho_mcp_read_only",
+    "read_only_zoho",
+    "readonly_zoho",
+  ].some((tool) => normalizedTools.has(tool));
+}
+
 export function isToolAvailable(tool: string, sourceKind: string, availableTools?: string[]) {
   if (!availableTools?.length) {
     return true;
@@ -36,6 +49,13 @@ export function isToolAvailable(tool: string, sourceKind: string, availableTools
   const normalizedTool = normalizeToolName(tool);
   const normalizedSource = normalizeToolName(sourceKind);
   if (normalized.has(normalizedTool) || normalized.has(normalizedSource)) {
+    return true;
+  }
+  if (
+    hasReadOnlyZohoSignal(normalized) &&
+    ["zoho_crm", "zoho_mail", "calendar", "zoho_calendar", "workdrive", "notebook", "zoho_notes"]
+      .includes(normalizedSource)
+  ) {
     return true;
   }
   if ((normalizedSource === "memory" || normalizedTool === "prepare_assistant_session") &&

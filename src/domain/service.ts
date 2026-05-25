@@ -21,6 +21,10 @@ import {
   type LightLaneKnownDealUpdate,
   type LightLaneRecoveryAiBrainInput,
 } from "~/domain/light-lane-memory-recovery";
+import {
+  buildLightLaneLiveStatePlan,
+  buildZohoExternalWritePlan,
+} from "~/domain/light-lane-live-state";
 import { buildOperatingBrief, buildRequestPlan } from "~/domain/operating-brief";
 import {
   buildLogicalPath,
@@ -1315,6 +1319,23 @@ export class MemoryService {
       proposedAction: input.proposedAction,
       includeInstructions: input.includeInstructions,
     });
+  }
+
+  planLightLaneLiveStateRefresh(input: {
+    project?: string;
+    userIntent?: string;
+    availableTools?: string[];
+    force?: boolean;
+  }) {
+    return buildLightLaneLiveStatePlan(input);
+  }
+
+  planZohoExternalWrite(input: {
+    project?: string;
+    requestedAction: string;
+    writeCapableConnectorName?: string;
+  }) {
+    return buildZohoExternalWritePlan(input);
   }
 
   async resolveContext(input: { projectOrTopic?: string; userIntent?: string }) {

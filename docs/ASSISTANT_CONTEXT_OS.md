@@ -41,6 +41,16 @@ ContextOS is a control plane, not a hard-coded adapter bus for every live system
 - `prepare_assistant_session` and `plan_request` embed the same guidance in `environment_tool_guidance`.
 - If a host lacks GitHub, CRM, email, calendar, Shopify, Cloudflare, terminal, or other live tools, the assistant must say what was not checked and reduce confidence.
 
+## Project-Specific Live State
+
+Some business projects may opt into a limited read-only live-state loop. ContextOS may plan read-through checks and maintain safe structured current state from a separate read-only external MCP connection when that connection is configured by the client.
+
+- Use the project-specific live-state planner for deal, account, customer, email, calendar, proposal, or current-state questions when `current_truth` is missing or stale.
+- Store only structured `entity_state`, `source_event`, `task`, `fact`, and `decision` records from safe summaries.
+- Do not store raw CRM payloads, full email bodies, attachments, full attendee lists, private notes, credentials, or broad dumps of external data.
+- Do not use business connectors for projects that have not opted in unless the user explicitly asks.
+- Do not mutate external systems from ContextOS. For updates, sends, deletes, or calendar edits, use the external-write planner; the assistant must use a separate write-capable MCP after explicit confirmation and then write back only a concise durable summary.
+
 ## Fake Example
 
 ```json

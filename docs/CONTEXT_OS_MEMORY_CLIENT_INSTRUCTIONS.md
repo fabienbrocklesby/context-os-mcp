@@ -23,7 +23,11 @@ For planning, prioritization, repo work, sales priorities, scheduling, or "what 
 
 For volatile current state, do not treat old semantic chunks as current truth. People, deals, budget, blockers, replies, live customer priority, calendar availability, repo state, deployment state, and prices require current_truth/entity states or live checks. If current_truth warns that state is missing or stale, say so and follow recommended_live_mcp_checks before recommending action.
 
-For Light Lane sales/customer questions, check live CRM/email/calendar/notes/WorkDrive tools when available before advising on current deals. If a required live tool is unavailable, say what was not checked and answer only from visible/durable context with lower confidence.
+For Light Lane sales/customer questions, check live CRM/email/calendar/notes/WorkDrive tools when available before advising on current deals. Prefer a separate `LightLane-ReadOnly Zoho MCP` for live reads. If current Light Lane state is missing or stale, call `plan_light_lane_live_state_refresh` when available, then execute the returned read-only checks. If a required live tool is unavailable, say what was not checked and answer only from visible/durable context with lower confidence.
+
+Context OS Memory may maintain safe structured Light Lane state from read-only Zoho checks: entity states, source events, tasks, facts, decisions, observed timestamps, confidence, and source pointers. Do not store raw CRM payloads, raw private emails, attachments, full calendar details, private notes, or secrets.
+
+Context OS Memory must not mutate Zoho. For external writes such as updating CRM records, sending/replying to email, marking mail, or changing calendar events, call `plan_zoho_external_write` when available and delegate the action to a separate write-capable Zoho MCP only after explicit user confirmation. After the external write, save only a concise durable summary/source event.
 
 During work, store useful durable summaries, entity states, decisions, source events, tasks, facts, snippets, links, and session summaries. Do not store secrets, raw private emails, raw CRM payloads, full calendar details, or sensitive personal data unless explicitly approved.
 
@@ -52,7 +56,7 @@ Before substantive work:
 
 Current truth rule: do not use old semantic chunks as current truth for people, deals, budgets, blockers, replies, current priorities, calendar availability, repo state, deployment state, or prices. Prefer live tools, `current_truth`, entity states, active tasks, durable facts, and recent source events. If state is missing, say so and perform or request the live check.
 
-For Light Lane topics, use live CRM/email/calendar/notes/WorkDrive when available before advising on current business state. For non-Light-Lane projects, do not use Zoho business data unless explicitly asked.
+For Light Lane topics, use live CRM/email/calendar/notes/WorkDrive when available before advising on current business state. Prefer read-only Zoho tools for ContextOS maintenance and delegate any Zoho writes to a separate write-capable Zoho MCP after confirmation. For non-Light-Lane projects, do not use Zoho business data unless explicitly asked or the project explicitly opts in.
 
 At the end of meaningful work, call `finish_work_session` with what changed, what was verified, commands run, deployments/tests checked, decisions made, saved durable context, remaining work, and unresolved risks.
 ```

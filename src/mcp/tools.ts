@@ -548,6 +548,58 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   );
 
   server.registerTool(
+    "plan_light_lane_live_state_refresh",
+    {
+      description:
+        "Plan safe read-only Zoho live-state checks and structured write-back for Light Lane current-state work.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        user_intent: z.string().optional(),
+        available_tools: z.array(z.string()).optional(),
+        force: z.boolean().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, user_intent, available_tools, force }) =>
+      textResult(
+        service.planLightLaneLiveStateRefresh({
+          project,
+          userIntent: user_intent,
+          availableTools: available_tools,
+          force,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "plan_zoho_external_write",
+    {
+      description:
+        "Plan a delegated Zoho write action. ContextOS never mutates Zoho; it points the assistant to a separate write-capable Zoho MCP with confirmation and write-back rules.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        requested_action: z.string().min(1),
+        write_capable_connector_name: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ project, requested_action, write_capable_connector_name }) =>
+      textResult(
+        service.planZohoExternalWrite({
+          project,
+          requestedAction: requested_action,
+          writeCapableConnectorName: write_capable_connector_name,
+        }),
+      ),
+  );
+
+  server.registerTool(
     "project_status",
     {
       description:
