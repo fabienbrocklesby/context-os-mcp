@@ -119,7 +119,7 @@ Vectorize stores chunk embeddings for retrieval.`,
       WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
       MEMORY_INDEX: {} as VectorizeIndex,
       AI: {} as Ai,
-    } as Env;
+    } as unknown as Env;
 
     await reindexWorkDriveDocument(
       env,
@@ -208,7 +208,7 @@ This summary contains important sales context that should remain searchable as b
       WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
       MEMORY_INDEX: {} as VectorizeIndex,
       AI: {} as Ai,
-    } as Env;
+    } as unknown as Env;
 
     await reindexWorkDriveDocument(
       env,

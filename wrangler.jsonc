@@ -58,6 +58,10 @@
 			"*/30 * * * *"
 		]
 	},
+	// Credentials are optional runtime modes; prevent local .dev.vars from changing committed generated types.
+	"secrets": {
+		"required": []
+	},
 	"vars": {
 		"APP_BASE_URL": "https://memory-system-mcp.cloudflare-9f0.workers.dev",
 		"MCP_ROUTE": "/mcp",

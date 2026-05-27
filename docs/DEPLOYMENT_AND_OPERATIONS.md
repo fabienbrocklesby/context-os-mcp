@@ -574,6 +574,11 @@ npm run typecheck
 npm test
 ```
 
+`npm run typecheck` first runs `wrangler types --check` against the committed
+`src/worker-configuration.d.ts`. After editing `wrangler.jsonc`, regenerate it
+with `npm run cf-typegen` and commit the updated declaration so clean Cloudflare
+Git builds have the `Env` binding type available.
+
 Apply migrations locally:
 
 ```bash

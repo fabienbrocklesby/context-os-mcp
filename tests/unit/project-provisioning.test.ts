@@ -110,5 +110,5 @@ function baseEnv() {
     WORKDRIVE_PROJECTS_ROOT_FOLDER_ID: "projects-root",
     WORKDRIVE_SHARED_ROOT_FOLDER_ID: "shared-root",
     DB: {} as D1Database,
-  } as Env;
+  } as unknown as Env;
 }

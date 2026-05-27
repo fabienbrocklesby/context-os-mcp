@@ -10,7 +10,6 @@ coverage/
 # Cloudflare local/generated state
 .wrangler/
 .wrangler-*/
-src/worker-configuration.d.ts
 
 # Local secrets and environment
 .dev.vars

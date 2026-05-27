@@ -39,7 +39,7 @@ describe("serveAuthenticatedMcpRequest", () => {
         ZOHO_ACCOUNTS_BASE_URL: "https://accounts.zoho.com",
         WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
         DB: {} as D1Database,
-      } as Env,
+      } as unknown as Env,
       {
         props: {},
         waitUntil() {},
