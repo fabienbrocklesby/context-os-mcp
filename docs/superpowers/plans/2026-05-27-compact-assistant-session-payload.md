@@ -4,7 +4,7 @@
 
 **Goal:** Make `prepare_assistant_session` and `plan_request` compact by default so AI clients receive bounded, high-signal context packs rather than duplicated full documents or planning material.
 
-**Architecture:** Keep persistence and search quality unchanged, but introduce a compact response assembly boundary for session setup. Compact mode reads current-context metadata only, summarizes repeated material, references top-level task/tool details instead of copying them into the operating brief, and enforces a 64 KB budget with focused retrieval instructions; explicit expanded mode retains the full diagnostic/compatibility response.
+**Architecture:** Keep persistence and search quality unchanged, but introduce a compact response assembly boundary for session setup. Compact mode reads current-context metadata only, summarizes repeated material, references top-level task and policy details instead of copying them across tool guidance and the operating brief, and enforces a 64 KB budget with focused retrieval instructions; explicit expanded mode retains the full diagnostic/compatibility response.
 
 **Tech Stack:** TypeScript, Cloudflare Workers MCP server, Vitest, D1/Vectorize-backed existing memory service.
 
@@ -31,6 +31,7 @@ expect(compact.response_mode).toBe("compact");
 expect(JSON.stringify(compact)).not.toContain("full context body");
 expect(compact.current_context.items[0]).not.toHaveProperty("snapshot");
 expect(compact.grouped_memory).not.toHaveProperty("grouped");
+expect(compact.grouped_memory.results.length).toBeGreaterThan(0);
 expect(compact.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
 expect(JSON.stringify(compact, null, 2).length).toBeLessThanOrEqual(64 * 1024);
 expect(compact.retrieval_guidance.tools).toContain("fetch");

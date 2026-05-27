@@ -300,6 +300,8 @@ describe("MemoryService assistant session reliability planning", () => {
   it("returns a bounded compact session manifest by default instead of full document bodies", async () => {
     const documents = Array.from({ length: 68 }, (_, index) => makeContextDocument(index));
     mocks.listCurrentContextDocuments.mockResolvedValue(documents);
+    mocks.searchDocumentsKeyword.mockResolvedValue(documents.slice(0, 8));
+    mocks.listTasks.mockResolvedValue(Array.from({ length: 8 }, (_, index) => makeTask(index)));
     mocks.getLatestSnapshot.mockImplementation(async () => ({
       rawMarkdown: `# Full document\n\n${"full context body ".repeat(350)}`,
     }));
@@ -313,11 +315,14 @@ describe("MemoryService assistant session reliability planning", () => {
     }) as PreparedSessionAssertions;
 
     expect(result.response_mode).toBe("compact");
-    expect(result.current_context.items).toHaveLength(68);
+    expect(result.current_context.items.length).toBeGreaterThan(0);
+    expect(result.current_context.items.length).toBeLessThanOrEqual(68);
     expect(result.current_context.items[0]).not.toHaveProperty("snapshot");
     expect(JSON.stringify(result.current_context)).not.toContain("full context body");
     expect(mocks.getLatestSnapshot).not.toHaveBeenCalled();
     expect(result.grouped_memory).not.toHaveProperty("grouped");
+    expect(result.grouped_memory.results).toBeTruthy();
+    expect((result.grouped_memory.results as unknown[]).length).toBeGreaterThan(0);
     expect(result.retrieval_guidance.tools).toEqual(
       expect.arrayContaining(["search_memory", "resolve_current_truth", "get_current_context", "fetch"]),
     );

@@ -69,14 +69,17 @@ import {
   compactContextResolution,
   compactCurrentContextDocuments,
   compactEntities,
+  compactEnvironmentToolGuidance,
   compactFacts,
   compactInitiativeContext,
+  compactLiveCheckRecommendations,
   compactOperatingBrief,
   compactProject,
   compactSearchMemory,
   compactSourceEvents,
   compactStrategyContext,
   compactTasks,
+  compactToolPlan,
   enforceCompactSessionBudget,
   retrievalGuidance,
   type AssistantSessionResponseMode,
@@ -1256,7 +1259,10 @@ export class MemoryService {
       tasks: compactTasks(tasks),
       source_events: compactSourceEvents(sourceEvents),
       facts: compactFacts(facts),
+      environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
+      tool_plan: compactToolPlan(assistantActionPlan.tool_plan),
       operating_brief: compactOperatingBrief(operatingBrief),
+      recommended_live_mcp_checks: compactLiveCheckRecommendations(session.recommended_live_mcp_checks),
     });
   }
 
@@ -2350,6 +2356,8 @@ export class MemoryService {
       grouped_memory: memory ? compactSearchMemory(memory) : null,
       active_tasks: compactTasks(activeTasks),
       relevant_assets: compactStrategy.assets,
+      environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
+      tool_plan: compactToolPlan(actionPlan.tool_plan),
       operating_brief: compactOperatingBrief(operatingBrief, "active_tasks"),
     });
   }

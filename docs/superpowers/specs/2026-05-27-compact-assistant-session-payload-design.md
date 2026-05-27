@@ -44,7 +44,7 @@ The legacy `prepare_work_session` wrapper continues to request expanded session 
 Compact session setup and compact planning responses must each fit within a 64 KB serialized JSON budget for the Nelson-shaped regression scenario, including a normally indented client rendering of the result. The compact representation is formed at the source rather than building and discarding a massive response:
 
 1. List current-context documents as metadata only instead of loading snapshots.
-2. Summarize repeated project, task, fact, source-event, and operating-brief sections. Compact operating briefs refer to top-level task and environment-guidance detail rather than duplicating it.
+2. Summarize repeated project, task, fact, source-event, tool-policy, environment-guidance, and operating-brief sections. Compact operating briefs refer to authoritative top-level task and policy detail rather than duplicating it.
 3. Remove duplicate grouping of already returned intent-ranked results.
 4. Replace provider-level retrieval diagnostics with a small retrieval summary; detailed diagnostics remain available through `retrieval_diagnostics`.
 5. Serialize native MCP JSON results without whitespace-only pretty-print expansion, while enforcing the budget against indented client-readable JSON so local wrappers and stored tool results are bounded too.
@@ -87,7 +87,7 @@ Update agent/client documentation to tell models that session setup returns a co
 - Unit/integration test explicit expanded mode retains full Markdown material.
 - Unit/integration test legacy `prepare_work_session` remains expanded for compatibility.
 - Contract tests accept `response_mode` on both startup and planning tools.
-- Regression tests model a large current-context set and a large planning task/event set, asserting both compact and indented client-rendered output are no greater than 64 KB while retaining required live-check and retrieval guidance.
+- Regression tests model a large current-context set and a large planning task/event set, asserting both compact and indented client-rendered output are no greater than 64 KB while retaining ranked recall, required live-check, and retrieval guidance.
 - Verify typecheck, full test suite, and a live post-deployment Nelson-shaped request.
 
 ## Deployment

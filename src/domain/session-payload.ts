@@ -183,11 +183,11 @@ export function compactOperatingBrief(
     relevant_assets: asArray(payload.relevant_assets).slice(0, 8).map((asset) => compactAsset(asRecord(asset))),
     current_tasks_milestones: {
       detail_location: taskDetailLocation,
-      open_task_ids: compactItemIds(asArray(taskPayload.open_tasks)),
-      due_or_blocked_task_ids: compactItemIds(asArray(taskPayload.due_or_blocked_tasks)),
-      high_priority_task_ids: compactItemIds(asArray(taskPayload.high_priority_tasks)),
+      open_task_count: asArray(taskPayload.open_tasks).length,
+      due_or_blocked_task_count: asArray(taskPayload.due_or_blocked_tasks).length,
+      high_priority_task_count: asArray(taskPayload.high_priority_tasks).length,
       milestones: compactUnknownStrategic(asArray(taskPayload.milestones)),
-      overdue_markers: taskPayload.overdue_markers,
+      overdue_count: asArray(taskPayload.overdue_markers).length,
     },
     source_freshness: {
       ...freshness,
@@ -196,7 +196,17 @@ export function compactOperatingBrief(
     },
     environment_tool_guidance: {
       detail_location: "environment_tool_guidance",
-      write_back_policy: environmentGuidance.write_back_policy,
+      write_back_policy: {
+        detail_location: "write_back_policy",
+        mode: asRecord(environmentGuidance.write_back_policy).mode,
+      },
+    },
+    write_back_plan: {
+      detail_location: "write_back_policy",
+      recommendations: asArray(asRecord(payload.write_back_plan).recommendations).map((raw) => {
+        const item = asRecord(raw);
+        return { tool: item.tool, when: item.when, save_policy: item.save_policy };
+      }),
     },
   };
 }
@@ -214,6 +224,59 @@ export function compactEntities(entities: unknown[]) {
       confidence: item.confidence,
     };
   });
+}
+
+export function compactEnvironmentToolGuidance(guidance: unknown) {
+  const payload = asRecord(guidance);
+  return {
+    environment: payload.environment,
+    available_capabilities: asArray(payload.available_capabilities).map((raw) => {
+      const item = asRecord(raw);
+      return {
+        capability: item.capability,
+        source_kind: item.source_kind,
+        tool_name: item.tool_name,
+        save_policy: item.save_policy,
+        source_of_truth: item.source_of_truth,
+        volatile: item.volatile,
+      };
+    }),
+    relevant_capabilities: asArray(payload.relevant_capabilities),
+    unavailable_required_capabilities: asArray(payload.unavailable_required_capabilities),
+    required_live_checks: asArray(payload.required_live_checks),
+    live_checks_to_perform: asArray(payload.live_checks_to_perform),
+    contextos_can_execute: payload.contextos_can_execute,
+    client_must_execute: payload.client_must_execute,
+    client_instructions: asArray(payload.client_instructions).map((item) =>
+      truncate(stringOrNull(item), 180)),
+    confirmation_required: payload.confirmation_required,
+    unavailable_tool_warnings: payload.unavailable_tool_warnings,
+    fallback_plan: asArray(payload.fallback_plan).map((item) => truncate(stringOrNull(item), 180)),
+    write_back_policy: {
+      detail_location: "write_back_policy",
+      mode: asRecord(payload.write_back_policy).mode,
+    },
+  };
+}
+
+export function compactToolPlan(plan: unknown) {
+  const payload = asRecord(plan);
+  return {
+    required_tools: asArray(payload.required_tools),
+    optional_tools: asArray(payload.optional_tools),
+    forbidden_without_confirmation: asArray(payload.forbidden_without_confirmation),
+    write_back_recommendations: asArray(payload.write_back_recommendations).map((raw) => {
+      const item = asRecord(raw);
+      return { tool: item.tool, when: item.when };
+    }),
+    connector_policy_defaults: {
+      detail_location: "write_back_policy",
+    },
+  };
+}
+
+export function compactLiveCheckRecommendations(checks: unknown[]) {
+  return checks.map((check) => truncate(stringOrNull(check), 180));
 }
 
 export function retrievalGuidance() {
@@ -338,10 +401,6 @@ function compactUnknownTasks(tasks: unknown[]) {
       dueAt: item.dueAt,
     };
   });
-}
-
-function compactItemIds(items: unknown[]) {
-  return items.slice(0, MAX_TASKS).map((item) => asRecord(item).id).filter(Boolean);
 }
 
 function compactUnknownFacts(facts: unknown[]) {
