@@ -76,7 +76,7 @@ export type AssistantSessionResponseMode = "compact" | "expanded";
 export function compactCurrentContextDocuments(documents: MemoryDocument[]) { /* metadata only */ }
 export function compactSearchMemory(memory: unknown) { /* ranked excerpts once, summary diagnostics */ }
 export function compactOperatingBrief(brief: unknown) { /* no copied full arrays/records */ }
-export function enforceCompactSessionBudget(session: Record<string, unknown>) { /* retain safety fields */ }
+export function enforceCompactSessionBudget(session: Record<string, unknown>) { /* budget readable JSON; retain safety fields */ }
 ```
 
 Implement deterministic optional-section trimming only when serialized compact output exceeds the fixed budget. `current_truth`, required live checks, actionability, and write-back guardrails must survive trimming.

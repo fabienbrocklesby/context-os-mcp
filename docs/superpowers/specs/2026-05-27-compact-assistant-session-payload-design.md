@@ -47,7 +47,7 @@ Compact session setup and compact planning responses must each fit within a 64 K
 2. Summarize repeated project, task, fact, source-event, and operating-brief sections. Compact operating briefs refer to top-level task and environment-guidance detail rather than duplicating it.
 3. Remove duplicate grouping of already returned intent-ranked results.
 4. Replace provider-level retrieval diagnostics with a small retrieval summary; detailed diagnostics remain available through `retrieval_diagnostics`.
-5. Serialize MCP JSON results without whitespace-only pretty-print expansion, so the response budget represents bytes delivered to the client.
+5. Serialize native MCP JSON results without whitespace-only pretty-print expansion, while enforcing the budget against indented client-readable JSON so local wrappers and stored tool results are bounded too.
 6. If a large project still exceeds the budget, deterministically reduce optional excerpt and manifest sections while returning counts and deep-retrieval instructions, never dropping current-truth or required live-check safety guidance.
 
 ## Retrieval Quality

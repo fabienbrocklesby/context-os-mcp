@@ -463,7 +463,7 @@ function updateSize(payload: Record<string, unknown>, trimmed: boolean) {
 }
 
 function serializedBytes(payload: unknown) {
-  return new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+  return new TextEncoder().encode(JSON.stringify(payload, null, 2)).byteLength;
 }
 
 function truncate(value: string | null, maxLength: number) {

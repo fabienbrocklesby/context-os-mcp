@@ -324,6 +324,9 @@ describe("MemoryService assistant session reliability planning", () => {
     expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(64 * 1024);
+    expect(result.payload_budget.serialized_bytes).toBe(
+      new TextEncoder().encode(JSON.stringify(result, null, 2)).byteLength,
+    );
   });
 
   it("retains full current-context material only when expanded session mode is requested", async () => {
@@ -459,6 +462,9 @@ describe("MemoryService assistant session reliability planning", () => {
     expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(64 * 1024);
+    expect(result.payload_budget.serialized_bytes).toBe(
+      new TextEncoder().encode(JSON.stringify(result, null, 2)).byteLength,
+    );
     expect(result.operating_brief.current_tasks_milestones).toMatchObject({
       detail_location: "active_tasks",
     });
