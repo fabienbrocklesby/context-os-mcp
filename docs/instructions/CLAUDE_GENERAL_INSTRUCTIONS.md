@@ -48,6 +48,8 @@ Read and follow the returned:
 - `write_back_policy`
 - `environment_tool_guidance`
 
+`prepare_assistant_session` and `plan_request` return compact, response-budgeted context packs by default. This is intentional: read the pack first, then use `search_memory`, `resolve_current_truth`, `get_current_context` with a focused query, or `fetch` for only the full source material needed for the answer. Do not request `response_mode="expanded"` during normal startup; use it only for deliberate diagnostic or compatibility inspection.
+
 For planning, prioritization, repo work, sales priorities, scheduling, or "what should I do next?", call `plan_request`.
 
 For tool-sensitive work, call `plan_environment_tool_use` or follow `environment_tool_guidance`.

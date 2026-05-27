@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MemoryPrincipal, MemoryProject } from "~/domain/memory";
+import type {
+  ContextTask,
+  MemoryPrincipal,
+  MemoryProject,
+  ResolvedMemoryDocument,
+  SourceEvent,
+} from "~/domain/memory";
 
 const LIGHT_LANE_REPOS = [
   "Light-Lane/LightLane-Site-V2",
@@ -12,6 +18,44 @@ const LIGHT_LANE_REPOS = [
   "Light-Lane/LightLane-Website",
   "Light-Lane/LightLane-Public-Facing-Website",
 ];
+
+type PreparedSessionAssertions = {
+  response_mode: string;
+  active_project: { slug: string };
+  context_resolution: { project_switching: { selected: string } };
+  operational_context: Record<string, unknown>;
+  request_classification: { categories: Record<string, unknown> };
+  actionability: { label: string };
+  tool_plan: { required_tools: unknown[] };
+  write_back_policy: { mode: string };
+  strategy_context: Record<string, unknown>;
+  operating_brief: {
+    environment_tool_guidance: unknown;
+    required_live_checks: unknown[];
+  } & Record<string, unknown>;
+  environment_tool_guidance: Record<string, unknown>;
+  current_context: {
+    items: Array<Record<string, unknown> & { snapshot?: { rawMarkdown?: string } }>;
+  };
+  grouped_memory: Record<string, unknown>;
+  retrieval_guidance: { tools: string[] };
+  payload_budget: { serialized_bytes: number };
+};
+
+type PlannedRequestAssertions = {
+  response_mode: string;
+  grouped_memory: Record<string, unknown> | null;
+  current_truth: Record<string, unknown> | null;
+  active_tasks: Array<Record<string, unknown>>;
+  operating_brief: {
+    required_live_checks: unknown[];
+    risks: unknown[];
+  } & Record<string, unknown>;
+  request_plan: Record<string, unknown>;
+  environment_tool_guidance: Record<string, unknown>;
+  retrieval_guidance: { tools: string[] };
+  payload_budget: { serialized_bytes: number };
+};
 
 const mocks = vi.hoisted(() => ({
   embedTexts: vi.fn(),
@@ -35,6 +79,7 @@ const mocks = vi.hoisted(() => ({
   searchDocumentsKeyword: vi.fn(),
   getChunkContentsByVectorIds: vi.fn(),
   getDocumentsByIds: vi.fn(),
+  getLatestSnapshot: vi.fn(),
 }));
 
 vi.mock("~/integrations/workers-ai/embeddings", () => ({
@@ -137,6 +182,10 @@ vi.mock("~/persistence/d1/repository", () => ({
     getDocumentsByIds(documentIds: string[]) {
       return mocks.getDocumentsByIds(documentIds);
     }
+
+    getLatestSnapshot(documentId: string) {
+      return mocks.getLatestSnapshot(documentId);
+    }
   },
 }));
 
@@ -171,6 +220,9 @@ describe("MemoryService assistant session reliability planning", () => {
     mocks.searchDocumentsKeyword.mockResolvedValue([]);
     mocks.getChunkContentsByVectorIds.mockResolvedValue(new Map());
     mocks.getDocumentsByIds.mockResolvedValue(new Map());
+    mocks.getLatestSnapshot.mockResolvedValue({
+      rawMarkdown: "# Context\n\nfull context body",
+    });
   });
 
   it("adds reliability fields to prepare_assistant_session without removing existing fields", async () => {
@@ -183,7 +235,7 @@ describe("MemoryService assistant session reliability planning", () => {
       activeSources: ["zoho_crm"],
       timezone: "Pacific/Auckland",
       now: "2026-05-01T22:30:00.000Z",
-    });
+    }) as PreparedSessionAssertions;
 
     expect(result.active_project.slug).toBe("memory-system-mcp");
     expect(result.context_resolution.project_switching.selected).toBe("memory-system-mcp");
@@ -245,6 +297,77 @@ describe("MemoryService assistant session reliability planning", () => {
     );
   });
 
+  it("returns a bounded compact session manifest by default instead of full document bodies", async () => {
+    const documents = Array.from({ length: 68 }, (_, index) => makeContextDocument(index));
+    mocks.listCurrentContextDocuments.mockResolvedValue(documents);
+    mocks.getLatestSnapshot.mockImplementation(async () => ({
+      rawMarkdown: `# Full document\n\n${"full context body ".repeat(350)}`,
+    }));
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "Prepare for Nelson sales meetings tomorrow.",
+      taskProfile: "sales_proposal",
+    }) as PreparedSessionAssertions;
+
+    expect(result.response_mode).toBe("compact");
+    expect(result.current_context.items).toHaveLength(68);
+    expect(result.current_context.items[0]).not.toHaveProperty("snapshot");
+    expect(JSON.stringify(result.current_context)).not.toContain("full context body");
+    expect(mocks.getLatestSnapshot).not.toHaveBeenCalled();
+    expect(result.grouped_memory).not.toHaveProperty("grouped");
+    expect(result.retrieval_guidance.tools).toEqual(
+      expect.arrayContaining(["search_memory", "resolve_current_truth", "get_current_context", "fetch"]),
+    );
+    expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("retains full current-context material only when expanded session mode is requested", async () => {
+    mocks.listCurrentContextDocuments.mockResolvedValue([makeContextDocument(1)]);
+    mocks.getLatestSnapshot.mockResolvedValue({
+      rawMarkdown: "# Full document\n\nfull context body",
+    });
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "Inspect full context.",
+      responseMode: "expanded",
+    }) as PreparedSessionAssertions;
+
+    expect(result.response_mode).toBe("expanded");
+    const item = result.current_context.items[0];
+    expect(item).toHaveProperty("snapshot");
+    if (!("snapshot" in item)) {
+      throw new Error("Expected expanded current-context item to contain a snapshot.");
+    }
+    expect(item.snapshot?.rawMarkdown).toContain("full context body");
+  });
+
+  it("keeps the legacy prepare_work_session wrapper expanded for compatibility", async () => {
+    mocks.listCurrentContextDocuments.mockResolvedValue([makeContextDocument(2)]);
+    mocks.getLatestSnapshot.mockResolvedValue({
+      rawMarkdown: "# Legacy material\n\nfull context body",
+    });
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareWorkSession({
+      project: "memory-system-mcp",
+      topic: "Legacy client context",
+    }) as {
+      current_context: {
+        items: Array<{ snapshot?: { rawMarkdown?: string } }>;
+      };
+    };
+
+    expect(result.current_context.items[0]?.snapshot?.rawMarkdown).toContain("full context body");
+  });
+
   it("returns an operating brief and request plan with missing live-tool warnings", async () => {
     const { MemoryService } = await import("~/domain/service");
     const service = new MemoryService(makeEnv(), makePrincipal());
@@ -255,7 +378,7 @@ describe("MemoryService assistant session reliability planning", () => {
       availableTools: ["prepare_assistant_session"],
       timezone: "Pacific/Auckland",
       now: "2026-05-01T22:30:00.000Z",
-    });
+    }) as PlannedRequestAssertions;
 
     expect(result.operating_brief.required_live_checks).toEqual(
       expect.arrayContaining([
@@ -311,6 +434,29 @@ describe("MemoryService assistant session reliability planning", () => {
         expect.objectContaining({ capability: "github_live" }),
       ]),
     });
+  });
+
+  it("returns a bounded compact planning response by default", async () => {
+    mocks.listTasks.mockResolvedValue(Array.from({ length: 12 }, (_, index) => makeTask(index)));
+    mocks.listSourceEvents.mockResolvedValue(Array.from({ length: 10 }, (_, index) => makeSourceEvent(index)));
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.planRequest({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "Prepare for Nelson sales meetings tomorrow.",
+      taskProfile: "sales_proposal",
+    }) as PlannedRequestAssertions;
+
+    expect(result.response_mode).toBe("compact");
+    expect(result.active_tasks).toHaveLength(12);
+    expect(String(result.active_tasks[0]?.description).length).toBeLessThanOrEqual(240);
+    expect(result.retrieval_guidance.tools).toContain("search_memory");
+    expect(result.current_truth).toMatchObject({
+      guardrails: expect.any(Object),
+    });
+    expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
   });
 
   it("adds the Light Lane sales proposal context pack and quality gates to plan_request", async () => {
@@ -404,5 +550,69 @@ function makeProject(overrides: Partial<MemoryProject> = {}): MemoryProject {
     createdAt: "2026-05-01T00:00:00.000Z",
     updatedAt: "2026-05-01T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+function makeContextDocument(index: number): ResolvedMemoryDocument {
+  return {
+    id: `document-${index}`,
+    workdriveFileId: `workdrive-${index}`,
+    currentSnapshotId: `snapshot-${index}`,
+    path: `/memory/projects/memory-system-mcp/context/current/document-${index}.md`,
+    title: `Context Document ${index}`,
+    project: "memory-system-mcp",
+    namespace: "memory-system-mcp",
+    parentFolderId: "current",
+    fileName: `document-${index}.md`,
+    permalink: null,
+    downloadUrl: null,
+    memoryType: index % 2 === 0 ? "current_context" : "decision",
+    status: "active",
+    canonical: true,
+    active: true,
+    revision: 1,
+    tags: ["context"],
+  };
+}
+
+function makeTask(index: number): ContextTask {
+  return {
+    id: `task-${index}`,
+    project: "memory-system-mcp",
+    title: `Task ${index}`,
+    description: "very large task detail ".repeat(400),
+    status: "open",
+    priority: index % 2 === 0 ? "high" : "normal",
+    dueAt: "2026-05-28T09:00:00+12:00",
+    owner: null,
+    initiativeId: null,
+    entityId: null,
+    source: "test",
+    sourceUrl: null,
+    reminderAt: null,
+    metadata: {},
+    createdAt: "2026-05-27T00:00:00.000Z",
+    updatedAt: "2026-05-27T00:00:00.000Z",
+  };
+}
+
+function makeSourceEvent(index: number): SourceEvent {
+  return {
+    id: `event-${index}`,
+    project: "memory-system-mcp",
+    source: "test",
+    sourceId: null,
+    eventType: "context_update",
+    occurredAt: "2026-05-27T00:00:00.000Z",
+    title: `Event ${index}`,
+    summary: "very large source event ".repeat(400),
+    sensitivity: "internal",
+    savePolicy: "durable_summary",
+    initiativeId: null,
+    entityId: null,
+    externalUrl: null,
+    metadata: {},
+    createdAt: "2026-05-27T00:00:00.000Z",
+    updatedAt: "2026-05-27T00:00:00.000Z",
   };
 }

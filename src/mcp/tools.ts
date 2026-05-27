@@ -204,7 +204,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     "prepare_assistant_session",
     {
       description:
-        "Resolve active project/topic and return a backward-compatible assistant session plus an Assistant Context OS operating brief with actionability, required live checks, risks, and write-back plan.",
+        "Resolve active project/topic and return a compact Assistant Context OS operating brief by default, with actionability, required live checks, relevant excerpts, risks, and write-back plan. Use response_mode=expanded only for deliberate full-material retrieval or legacy diagnostics.",
       inputSchema: z.object({
         project_or_topic: z.string().optional(),
         user_intent: z.string().optional(),
@@ -216,6 +216,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         business_hours: businessHoursSchema.optional(),
         authoritative: z.boolean().optional(),
         task_profile: taskProfileSchema.optional(),
+        response_mode: z.enum(["compact", "expanded"]).optional(),
       }),
       annotations: {
         idempotentHint: true,
@@ -232,6 +233,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       business_hours,
       authoritative,
       task_profile,
+      response_mode,
     }) =>
       textResult(
         await service.prepareAssistantSession({
@@ -245,6 +247,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           businessHours: business_hours,
           authoritative,
           taskProfile: task_profile,
+          responseMode: response_mode,
         }),
       ),
   );
@@ -1607,7 +1610,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     "plan_request",
     {
       description:
-        "Main planning tool for 'How do I achieve X?' or 'What should I do next?'. Returns memory, strategy, assets, tasks, actionability, required live checks, alignment, an operating brief, and a request plan.",
+        "Main planning tool for 'How do I achieve X?' or 'What should I do next?'. Returns a compact planning pack by default with memory, strategy, actionability, required live checks, and a request plan. Use response_mode=expanded only for deliberate detailed retrieval or legacy diagnostics.",
       inputSchema: z.object({
         project_or_topic: z.string().optional(),
         user_intent: z.string().min(1),
@@ -1621,6 +1624,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
         include_assets: z.boolean().optional(),
         include_active_tasks: z.boolean().optional(),
         task_profile: taskProfileSchema.optional(),
+        response_mode: z.enum(["compact", "expanded"]).optional(),
       }),
       annotations: {
         readOnlyHint: true,
@@ -1640,6 +1644,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       include_assets,
       include_active_tasks,
       task_profile,
+      response_mode,
     }) =>
       textResult(
         await service.planRequest({
@@ -1655,6 +1660,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
           includeAssets: include_assets,
           includeActiveTasks: include_active_tasks,
           taskProfile: task_profile,
+          responseMode: response_mode,
         }),
       ),
   );
@@ -2840,7 +2846,7 @@ function textResult(value: unknown) {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(value, null, 2),
+        text: JSON.stringify(value),
       },
     ],
   };

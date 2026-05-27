@@ -19,6 +19,8 @@ Use the connected Context OS Memory MCP server as the durable context system and
 
 Before meaningful work, call prepare_assistant_session with project_or_topic, user_intent, environment="claude", active_sources, and available_tools when known. Read operating_brief, context_resolution, current_truth, current_context, grouped_memory, entities, facts, tasks, source_events, context_health.warnings, recommended_live_mcp_checks, write_back_policy, and environment_tool_guidance before answering.
 
+prepare_assistant_session and plan_request return compact, response-budgeted context packs by default. Read the compact pack first, then use search_memory, resolve_current_truth, get_current_context with a focused query, or fetch for only the full source material relevant to the answer. Do not request response_mode="expanded" during normal startup; use it only for deliberate diagnostics or compatibility inspection.
+
 For planning, prioritization, repo work, sales priorities, scheduling, or "what should I do next?", call plan_request. If context is ambiguous, call resolve_context. If more recall is needed, call search_memory with scope project, initiative, entity, or all_related.
 
 For volatile current state, do not treat old semantic chunks as current truth. People, deals, budget, blockers, replies, live customer priority, calendar availability, repo state, deployment state, and prices require current_truth/entity states or live checks. If current_truth warns that state is missing or stale, say so and follow recommended_live_mcp_checks before recommending action.
@@ -48,11 +50,12 @@ Before substantive work:
 1. Identify the likely active project or topic.
 2. Call `prepare_assistant_session` with `project_or_topic`, `user_intent`, `environment: "codex"`, `available_tools`, and `active_sources` when relevant.
 3. Read `operating_brief`, `context_resolution`, `current_truth`, `current_context`, `grouped_memory`, `entities`, `facts`, `tasks`, `source_events`, `context_health.warnings`, `recommended_live_mcp_checks`, `write_back_policy`, and `environment_tool_guidance`.
-4. For planning, prioritization, repo work, sales priorities, or day/week plans, call `plan_request`.
-5. For tool-sensitive work, call `plan_environment_tool_use` or follow `environment_tool_guidance`.
-6. If context is ambiguous, call `resolve_context`.
-7. If more recall is needed, call `search_memory` with scope `project`, `initiative`, `entity`, or `all_related`.
-8. If current state matters, call `resolve_current_truth` or rely on `current_truth` from `prepare_assistant_session`.
+4. `prepare_assistant_session` and `plan_request` are compact by default. Use `search_memory`, `resolve_current_truth`, `get_current_context` with a focused query, or `fetch` when deeper source material is needed; use `response_mode: "expanded"` only for diagnostics or compatibility inspection.
+5. For planning, prioritization, repo work, sales priorities, or day/week plans, call `plan_request`.
+6. For tool-sensitive work, call `plan_environment_tool_use` or follow `environment_tool_guidance`.
+7. If context is ambiguous, call `resolve_context`.
+8. If more recall is needed, call `search_memory` with scope `project`, `initiative`, `entity`, or `all_related`.
+9. If current state matters, call `resolve_current_truth` or rely on `current_truth` from `prepare_assistant_session`.
 
 Current truth rule: do not use old semantic chunks as current truth for people, deals, budgets, blockers, replies, current priorities, calendar availability, repo state, deployment state, or prices. Prefer live tools, `current_truth`, entity states, active tasks, durable facts, and recent source events. If state is missing, say so and perform or request the live check.
 
@@ -68,7 +71,7 @@ I am Fabien, an 18-year-old founder in Nelson, New Zealand, building Light Lane.
 
 Always use the connected Context OS Memory app/MCP as the source of truth for project context. If the namespace appears as memory, use it as the legacy name for Context OS Memory. Do not rely on ChatGPT built-in memory for project facts, decisions, people, deals, tasks, or history.
 
-Before meaningful work: call prepare_assistant_session with project_or_topic, user_intent, environment="chatgpt", available_tools/apps/connectors if known, and active_sources if relevant. Read operating_brief, context_resolution, current_truth, environment_tool_guidance, grouped_memory, entities, facts, tasks, source_events, recommended_live_mcp_checks, and write_back_policy before proceeding.
+Before meaningful work: call prepare_assistant_session with project_or_topic, user_intent, environment="chatgpt", available_tools/apps/connectors if known, and active_sources if relevant. Read operating_brief, context_resolution, current_truth, environment_tool_guidance, grouped_memory, entities, facts, tasks, source_events, recommended_live_mcp_checks, and write_back_policy before proceeding. prepare_assistant_session and plan_request return compact packs by default; use focused search/current-truth/fetch tools for necessary full source material and response_mode="expanded" only for diagnostics or compatibility inspection.
 
 For planning, prioritization, repo work, sales priorities, scheduling, or "what should I do next?" questions: call plan_request. For tool-sensitive work: call plan_environment_tool_use or follow environment_tool_guidance. If context is ambiguous: call resolve_context.
 
@@ -84,7 +87,7 @@ After meaningful work: call finish_work_session with what changed, what was veri
 ```text
 Use Context OS Memory first. Built-in app memory is not authoritative for project facts, decisions, tasks, entity states, source events, repo context, or history.
 
-Before meaningful work, call prepare_assistant_session(project_or_topic, user_intent, environment?, active_sources?, available_tools?). Read operating_brief, context_resolution, current_truth, environment_tool_guidance, current_context, grouped_memory, entities, facts, tasks, source_events, recommended_live_mcp_checks, and write_back_policy.
+Before meaningful work, call prepare_assistant_session(project_or_topic, user_intent, environment?, active_sources?, available_tools?). Read operating_brief, context_resolution, current_truth, environment_tool_guidance, current_context, grouped_memory, entities, facts, tasks, source_events, recommended_live_mcp_checks, and write_back_policy. prepare_assistant_session and plan_request return compact packs by default; use focused search/current-truth/current-context/fetch tools for required detail and response_mode="expanded" only for diagnostics or compatibility inspection.
 
 Use plan_request for planning/prioritization/scheduling/repo/sales-priority questions. Use resolve_context when project scope is ambiguous. Use search_memory for extra recall. Use resolve_current_truth when current state matters.
 

@@ -37,15 +37,15 @@ AI clients should start meaningful work with:
 memory.prepare_assistant_session(project_or_topic, user_intent, environment?, active_sources?, available_tools?)
 ```
 
-This remains backward-compatible and now includes a normalized `operating_brief` with:
+This returns a compact, response-budgeted context pack by default and includes a normalized `operating_brief` with:
 
 - active project and possible related projects
 - validated date, weekday, timezone, business-day, and actionability context
 - deterministic request classification and tool-use plan
 - linked initiative context
 - compact strategic context, including visions, pillars, outcomes, milestones, assets, and branch-project warnings
-- canonical current context
-- grouped memory results
+- a canonical current-context document manifest
+- high-signal ranked memory excerpts
 - entities, facts, tasks, and source events
 - stale or missing context warnings
 - required live checks, including unavailable-tool warnings
@@ -53,13 +53,15 @@ This remains backward-compatible and now includes a normalized `operating_brief`
 - safe next actions and confirmation guardrails
 - write-back plan for durable memory
 
+The compact response intentionally does not embed every full current-context document. When source detail is required, retrieve it deliberately with `search_memory`, `resolve_current_truth`, `get_current_context` with a focused query, or `fetch`. Consumers that intentionally require the legacy detailed diagnostic payload may pass `response_mode: "expanded"`; it should not be used for ordinary AI session startup.
+
 For "How do I achieve X?", "What should I do next?", weekly/day planning, repo work, prioritization, and strategy decisions, use:
 
 ```text
 memory.plan_request(project_or_topic, user_intent, environment?, active_sources?, available_tools?)
 ```
 
-`plan_request` returns the same operating brief plus a request-specific plan with the objective, tool sequence, recommended scope, next actions, and write-back plan.
+`plan_request` also returns a compact, response-budgeted pack by default, plus a request-specific plan with the objective, tool sequence, recommended scope, next actions, and write-back plan. It accepts `response_mode: "expanded"` only for deliberate detailed inspection.
 
 Clients can also call:
 

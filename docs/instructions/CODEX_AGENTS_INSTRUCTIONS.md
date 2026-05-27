@@ -52,6 +52,7 @@ In Codex, if namespaced MCP tools are not exposed, use the local fallback comman
    - `write_back_policy`
    - `environment_tool_guidance`
    - `operating_brief`
+   Compact mode is the default for both `prepare_assistant_session` and `plan_request`. It returns high-signal excerpts and a current-context manifest rather than all full documents. Use `search_memory`, `resolve_current_truth`, `get_current_context` with a focused query, or `fetch` for necessary source detail. Use `response_mode: "expanded"` only for deliberate diagnostics or compatibility inspection.
 4. If context is ambiguous, call `resolve_context`.
 5. For planning, prioritization, repo work, sales priorities, or day/week plans, call `plan_request`.
 6. For tool-sensitive work, call `plan_environment_tool_use` or follow `environment_tool_guidance`. Codex must execute checks marked `client_must_execute` using terminal/GitHub/Cloudflare/plugins that are actually available.

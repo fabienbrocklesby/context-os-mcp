@@ -4,11 +4,13 @@
 
 `prepare_assistant_session` is the mandatory first Context OS call for AI clients, but the production response can exhaust the client's context window before useful work begins. A Light Lane Nelson sales-meeting preparation request produced a response of about 932 KB. The largest source was `current_context`, which loaded 68 active context and decision documents with full Markdown snapshots and returned the same objects in both `items` and `grouped`.
 
+The immediately recommended `plan_request` call has the same response-shaping defect even though it does not load full current-context documents: the Nelson request produces about 210 KB through duplicated operating-brief, retrieval, resolution, and task content. Correcting only session setup would leave planning capable of causing the same failure.
+
 This is a response-contract defect. The first call is intended to orient the assistant, resolve current truth, and direct any necessary retrieval or live checks. It should not export the project's complete document library by default.
 
 ## Goal
 
-Make `prepare_assistant_session` compact and safe for AI client context windows by default while preserving full-quality access to canonical context when relevant to the user's task.
+Make `prepare_assistant_session` and `plan_request` compact and safe for AI client context windows by default while preserving full-quality access to canonical context when relevant to the user's task.
 
 ## Non-Goals
 
@@ -19,7 +21,7 @@ Make `prepare_assistant_session` compact and safe for AI client context windows 
 
 ## Response Contract
 
-`prepare_assistant_session` accepts an optional `response_mode`:
+`prepare_assistant_session` and `plan_request` accept an optional `response_mode`:
 
 - `compact` is the default for AI client session setup.
 - `expanded` explicitly requests the existing deep/full-material shape for diagnostic or compatibility use.
@@ -35,15 +37,18 @@ Compact mode returns:
 
 Expanded mode preserves full `current_context` hydration and existing detailed result structures when deliberately requested.
 
+The legacy `prepare_work_session` wrapper continues to request expanded session material internally so existing legacy consumers are not silently switched to a different response shape.
+
 ## Payload Budget
 
-Compact session setup must fit within a 64 KB serialized JSON budget for the Nelson-shaped regression scenario. The compact representation is formed at the source rather than building and discarding a massive response:
+Compact session setup and compact planning responses must each fit within a 64 KB serialized JSON budget for the Nelson-shaped regression scenario. The compact representation is formed at the source rather than building and discarding a massive response:
 
 1. List current-context documents as metadata only instead of loading snapshots.
 2. Summarize repeated project, task, fact, source-event, and operating-brief sections.
 3. Remove duplicate grouping of already returned intent-ranked results.
 4. Replace provider-level retrieval diagnostics with a small retrieval summary; detailed diagnostics remain available through `retrieval_diagnostics`.
-5. If a large project still exceeds the budget, deterministically reduce optional excerpt and manifest sections while returning counts and deep-retrieval instructions, never dropping current-truth or required live-check safety guidance.
+5. Serialize MCP JSON results without whitespace-only pretty-print expansion, so the response budget represents bytes delivered to the client.
+6. If a large project still exceeds the budget, deterministically reduce optional excerpt and manifest sections while returning counts and deep-retrieval instructions, never dropping current-truth or required live-check safety guidance.
 
 ## Retrieval Quality
 
@@ -66,11 +71,11 @@ Add focused compaction helpers that summarize projects, current-context document
 
 ### Service Assembly
 
-Update `prepareAssistantSession` to select compact or expanded assembly. Compact mode avoids snapshot hydration at query time and builds its response from a document manifest and compacted retrieval results. Expanded mode retains current behavior.
+Update `prepareAssistantSession` and `planRequest` to select compact or expanded assembly. Compact session mode avoids snapshot hydration at query time and builds its response from a document manifest and compacted retrieval results. Compact planning mode applies the same single-copy summary boundary to memory, tasks, resolution, and the operating brief. Expanded mode retains current behavior.
 
 ### MCP Surface
 
-Expose `response_mode` on `prepare_assistant_session` and document the default and opt-in behavior in the tool description.
+Expose `response_mode` on `prepare_assistant_session` and `plan_request`, and document the default and opt-in behavior in both tool descriptions.
 
 ### Client Guidance
 
@@ -80,10 +85,11 @@ Update agent/client documentation to tell models that session setup returns a co
 
 - Unit/integration test compact mode does not return `snapshot.rawMarkdown` or duplicate grouped context.
 - Unit/integration test explicit expanded mode retains full Markdown material.
-- Contract test accepts `response_mode`.
-- Regression test models a large current-context set and asserts compact serialized output is no greater than 64 KB while retaining required live-check and retrieval guidance.
+- Unit/integration test legacy `prepare_work_session` remains expanded for compatibility.
+- Contract tests accept `response_mode` on both startup and planning tools.
+- Regression tests model a large current-context set and a large planning task/event set, asserting compact serialized output is no greater than 64 KB while retaining required live-check and retrieval guidance.
 - Verify typecheck, full test suite, and a live post-deployment Nelson-shaped request.
 
 ## Deployment
 
-No D1 migration or binding change is required. Production completion requires commit and push to `main`, deployment to the Cloudflare Worker, `/health` smoke verification, and a live `prepare_assistant_session` check showing compact default output beneath the response budget.
+No D1 migration or binding change is required. Production completion requires commit and push to `main`, deployment to the Cloudflare Worker, `/health` smoke verification, and live `prepare_assistant_session` and `plan_request` checks showing compact default output beneath the response budget.

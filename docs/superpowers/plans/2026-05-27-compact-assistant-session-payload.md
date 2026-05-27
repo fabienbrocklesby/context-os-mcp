@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `prepare_assistant_session` compact by default so AI clients receive a bounded, high-signal context pack rather than duplicated full project documents.
+**Goal:** Make `prepare_assistant_session` and `plan_request` compact by default so AI clients receive bounded, high-signal context packs rather than duplicated full documents or planning material.
 
 **Architecture:** Keep persistence and search quality unchanged, but introduce a compact response assembly boundary for session setup. Compact mode reads current-context metadata only, summarizes repeated material, and enforces a 64 KB budget with focused retrieval instructions; explicit expanded mode retains the full diagnostic/compatibility response.
 
@@ -43,9 +43,9 @@ const expanded = await service.prepareAssistantSession({
 expect(expanded.current_context.items[0].snapshot.rawMarkdown).toContain("full context body");
 ```
 
-- [ ] **Step 2: Write a failing MCP contract test**
+- [ ] **Step 2: Write failing planning and MCP contract tests**
 
-Call `prepare_assistant_session` using `response_mode: "expanded"` and assert the service receives/returns the expanded response marker, proving the wire-level option exists.
+Add a test asserting legacy `prepareWorkSession` still returns full snapshot material for compatibility. Add large task/source-event fixtures for `planRequest` and assert the default planning response is compact and bounded under 64 KB. Call both `prepare_assistant_session` and `plan_request` using `response_mode: "expanded"` and assert the service receives/returns the expanded response marker, proving the wire-level options exist.
 
 - [ ] **Step 3: Run the focused tests to verify red**
 
@@ -82,17 +82,17 @@ Implement deterministic optional-section trimming only when serialized compact o
 
 - [ ] **Step 2: Assemble compact mode without loading full snapshots**
 
-Update `MemoryService.prepareAssistantSession` to accept:
+Update `MemoryService.prepareAssistantSession` and `MemoryService.planRequest` to accept:
 
 ```ts
 responseMode?: AssistantSessionResponseMode;
 ```
 
-Default it to `"compact"`. In compact mode call `repo.listCurrentContextDocuments(project)` and return the metadata manifest; do not invoke `getCurrentContext()` and therefore do not hydrate snapshots. Continue to use full search/ranking internally for relevant excerpts, but return `compactSearchMemory(groupedMemory)`. In expanded mode keep the prior detailed `getCurrentContext()` and detailed structures.
+Default it to `"compact"`. In compact session mode call `repo.listCurrentContextDocuments(project)` and return the metadata manifest; do not invoke `getCurrentContext()` and therefore do not hydrate snapshots. Continue to use full search/ranking internally for relevant excerpts, but return `compactSearchMemory(groupedMemory)`. In compact planning mode summarize resolution, ranked memory, task lists, strategy, and operating-brief duplication while retaining the request plan. In expanded mode keep the prior detailed structures, and make the legacy `prepareWorkSession` wrapper explicitly invoke expanded mode.
 
 - [ ] **Step 3: Return budget and retrieval guidance**
 
-Compact responses must include:
+Compact session and planning responses must include:
 
 ```ts
 {
@@ -131,26 +131,30 @@ Expected: compact and expanded response tests pass.
 
 - [ ] **Step 1: Expose compact and expanded MCP modes**
 
-Add the schema field:
+Add the schema field to `prepare_assistant_session` and `plan_request`:
 
 ```ts
 response_mode: z.enum(["compact", "expanded"]).optional()
 ```
 
-Pass it into `service.prepareAssistantSession({ responseMode: response_mode })`, and state in the description that compact mode is the default while expanded mode is deliberate full-context retrieval.
+Pass it into the matching service method, and state in both descriptions that compact mode is the default while expanded mode is deliberate detailed retrieval.
 
-- [ ] **Step 2: Update agent guidance**
+- [ ] **Step 2: Serialize JSON results without formatting-only expansion**
+
+Add a contract test asserting JSON text does not contain indentation-only newlines, then change `textResult` to use `JSON.stringify(value)` so the compact budget represents the tool content delivered to an AI client.
+
+- [ ] **Step 3: Update agent guidance**
 
 Document this required client pattern:
 
 ```text
-prepare_assistant_session returns a compact context pack by default. Read it first, then use
+prepare_assistant_session and plan_request return compact context packs by default. Read them first, then use
 search_memory, resolve_current_truth, get_current_context with a query, or fetch for relevant
 full source material. Request response_mode="expanded" only for deliberate diagnostics or
 compatibility needs, not normal session startup.
 ```
 
-- [ ] **Step 3: Run MCP contract tests to verify green**
+- [ ] **Step 4: Run MCP contract tests to verify green**
 
 Run:
 
@@ -208,7 +212,9 @@ No migration files are changed, so no D1 migration is required. Deploy and execu
 npm run deploy
 curl -fsS https://memory-system-mcp.cloudflare-9f0.workers.dev/health
 ~/.codex/bin/memory-mcp prepare_assistant_session '{"project_or_topic":"Light Lane - Nelson sales meetings prep","user_intent":"Prepare for 5 Nelson sales meetings tomorrow booked by Christchurch BDR team (Xiarn). 4 meetings tomorrow 9am-5:30pm Port Nelson to Annesbrook. Need TODO list for tonight: review CRM deal notes, review emails from Xiarn, prep for handheld/manufacturing laser conversations. Will work between meetings from coffee shop.","environment":"claude","active_sources":["zoho_crm","zoho_mail","zoho_calendar"],"task_profile":"sales_proposal","timezone":"Pacific/Auckland"}' > /tmp/context-os-compact-session.json
+~/.codex/bin/memory-mcp plan_request '{"project_or_topic":"Light Lane - Nelson sales meetings prep","user_intent":"Prepare for 5 Nelson sales meetings tomorrow booked by Christchurch BDR team (Xiarn). 4 meetings tomorrow 9am-5:30pm Port Nelson to Annesbrook. Need TODO list for tonight: review CRM deal notes, review emails from Xiarn, prep for handheld/manufacturing laser conversations. Will work between meetings from coffee shop.","environment":"claude","active_sources":["zoho_crm","zoho_mail","zoho_calendar"],"task_profile":"sales_proposal","timezone":"Pacific/Auckland"}' > /tmp/context-os-compact-plan.json
 wc -c /tmp/context-os-compact-session.json
+wc -c /tmp/context-os-compact-plan.json
 ```
 
-Expected: health request succeeds and the live compact session response is no greater than 64 KB serialized JSON payload content.
+Expected: health request succeeds and both live compact responses are no greater than 64 KB serialized JSON payload content.

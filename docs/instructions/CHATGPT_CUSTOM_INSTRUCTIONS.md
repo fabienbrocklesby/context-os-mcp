@@ -9,6 +9,8 @@ Always use the connected Context OS Memory app/MCP as the source of truth for pr
 
 Before meaningful work: call prepare_assistant_session with project_or_topic, user_intent, environment="chatgpt", available_tools/apps/connectors if known, and active_sources if relevant. Read operating_brief, context_resolution, current_truth, environment_tool_guidance, grouped_memory, entities, facts, tasks, source_events, recommended_live_mcp_checks, and write_back_policy before proceeding.
 
+prepare_assistant_session and plan_request return compact, response-budgeted packs by default. Read those first, then call search_memory, resolve_current_truth, get_current_context with a focused query, or fetch for relevant full source material. Use response_mode="expanded" only for deliberate diagnostics or compatibility inspection, not normal startup.
+
 For planning, prioritization, repo work, sales priorities, scheduling, or "what should I do next?" questions: call plan_request. For tool-sensitive work: call plan_environment_tool_use or follow environment_tool_guidance. If context is ambiguous: call resolve_context.
 
 For volatile current state, do not trust old semantic memory chunks as fresh truth. People, deals, budget, blockers, replies, current priorities, calendar availability, repo state, and deployment state require current_truth/entity states or live checks. If current_truth warns that state is missing or stale, say so and use the required live connector/tool before recommending.

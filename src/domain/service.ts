@@ -65,6 +65,22 @@ import {
   type TaskProfile,
 } from "~/domain/retrieval-policy";
 import { isVisibleInProjectScope } from "~/domain/scope";
+import {
+  compactContextResolution,
+  compactCurrentContextDocuments,
+  compactEntities,
+  compactFacts,
+  compactInitiativeContext,
+  compactOperatingBrief,
+  compactProject,
+  compactSearchMemory,
+  compactSourceEvents,
+  compactStrategyContext,
+  compactTasks,
+  enforceCompactSessionBudget,
+  retrievalGuidance,
+  type AssistantSessionResponseMode,
+} from "~/domain/session-payload";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { embedTexts } from "~/integrations/workers-ai/embeddings";
 import { queryMemoryIndexWithDiagnostics, replaceDocumentVectors, deleteVectors } from "~/integrations/vectorize/client";
@@ -1019,6 +1035,7 @@ export class MemoryService {
       userIntent: input.topic,
       authoritative: input.authoritative,
       taskProfile: input.taskProfile,
+      responseMode: "expanded",
     });
     const project = assistantSession.active_project.slug;
     return {
@@ -1051,6 +1068,7 @@ export class MemoryService {
     };
     authoritative?: boolean;
     taskProfile?: TaskProfile;
+    responseMode?: AssistantSessionResponseMode;
   }) {
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
@@ -1074,9 +1092,10 @@ export class MemoryService {
       businessHours: input.businessHours,
       projectTimezone: activeProject.profile.timezone,
     });
+    const responseMode = input.responseMode ?? "compact";
 
     const [
-      currentContext,
+      currentContextDocuments,
       initiatives,
       relatedProjectLinks,
       entities,
@@ -1085,7 +1104,7 @@ export class MemoryService {
       facts,
       projectStatus,
     ] = await Promise.all([
-      this.getCurrentContext({ project, authoritative: input.authoritative }),
+      this.repo.listCurrentContextDocuments(project),
       this.repo.listInitiatives({ project, status: "active", limit: 10 }),
       this.repo.listRelatedProjects(project),
       this.repo.searchEntities({ project, query: input.userIntent, limit: 12 }),
@@ -1094,6 +1113,9 @@ export class MemoryService {
       this.repo.listFacts({ project, limit: 12 }),
       this.projectStatus({ project }),
     ]);
+    const currentContext = responseMode === "expanded"
+      ? await this.getCurrentContext({ project, authoritative: input.authoritative })
+      : compactCurrentContextDocuments(currentContextDocuments);
 
     const groupedMemory = input.userIntent
       ? await this.searchMemory({
@@ -1119,13 +1141,11 @@ export class MemoryService {
     const retrievalMode = classifyRetrievalMode(groupedMemory);
     const contextCompleteness = await this.assessContextCompletenessSafely({
       project,
-      currentContextDocuments: "items" in currentContext
-        ? currentContext.items.map((item) => ({
-            title: item.document.title,
-            path: item.document.path,
-            tags: item.document.tags,
-          }))
-        : [],
+      currentContextDocuments: currentContextDocuments.map((document) => ({
+        title: document.title,
+        path: document.path,
+        tags: document.tags,
+      })),
       repoFullNames: projectStatus.github_repos?.map((repo) => repo.repoFullName) ?? [],
     });
     const warnings = buildContextWarnings({
@@ -1182,7 +1202,8 @@ export class MemoryService {
       environmentToolGuidance,
     });
 
-    return {
+    const session = {
+      response_mode: responseMode,
       task_profile: taskProfile,
       required_context_pack: requiredContextPack,
       context_completeness: contextCompleteness,
@@ -1214,7 +1235,29 @@ export class MemoryService {
         currentTruthChecks: currentTruth?.required_live_checks,
       }),
       write_back_policy: writeBackPolicy,
+      retrieval_guidance: retrievalGuidance(),
+      payload_budget: responseMode === "expanded"
+        ? { max_bytes: null, serialized_bytes: null, trimmed: false }
+        : { max_bytes: 0, serialized_bytes: 0, trimmed: false },
     };
+    if (responseMode === "expanded") {
+      return session;
+    }
+
+    return enforceCompactSessionBudget({
+      ...session,
+      context_resolution: compactContextResolution(resolution),
+      active_project: compactProject(activeProject),
+      initiative_context: compactInitiativeContext(initiativeContext),
+      strategy_context: compactStrategyContext(strategyContext.strategy_context),
+      current_context: currentContext,
+      grouped_memory: compactSearchMemory(groupedMemory),
+      entities: compactEntities(entities),
+      tasks: compactTasks(tasks),
+      source_events: compactSourceEvents(sourceEvents),
+      facts: compactFacts(facts),
+      operating_brief: compactOperatingBrief(operatingBrief),
+    });
   }
 
   getOperationalContext(input: {
@@ -2165,6 +2208,7 @@ export class MemoryService {
     includeAssets?: boolean;
     includeActiveTasks?: boolean;
     taskProfile?: TaskProfile;
+    responseMode?: AssistantSessionResponseMode;
   }) {
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
@@ -2172,6 +2216,7 @@ export class MemoryService {
     });
     const project = resolution.active_project.slug;
     const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
+    const responseMode = input.responseMode ?? "compact";
     const requiredContextPack = buildRequiredContextPack({
       project,
       taskProfile,
@@ -2209,6 +2254,7 @@ export class MemoryService {
       save: false,
     });
     const retrievalMode = memory ? classifyRetrievalMode(memory) : "not_requested";
+    const currentTruth = memory && "current_truth" in memory ? memory.current_truth : null;
     const contextCompleteness = await this.assessContextCompletenessSafely(project);
     const contextWarnings = buildContextWarnings({
       projectStatus,
@@ -2254,7 +2300,13 @@ export class MemoryService {
       availableTools: input.availableTools,
       environmentToolGuidance,
     });
-    return {
+    const requestPlan = buildRequestPlan({
+      userIntent: input.userIntent,
+      operatingBrief,
+      recommendedScope: alignment.scopeGuidance,
+    });
+    const response = {
+      response_mode: responseMode,
       task_profile: taskProfile,
       required_context_pack: requiredContextPack,
       context_completeness: contextCompleteness,
@@ -2267,16 +2319,13 @@ export class MemoryService {
       tool_plan: actionPlan.tool_plan,
       strategy_context: strategy.strategy_context,
       grouped_memory: memory,
+      current_truth: currentTruth,
       active_tasks: activeTasks,
       relevant_assets: relevantAssets,
       alignment_assessment: alignment,
       environment_tool_guidance: environmentToolGuidance,
       operating_brief: operatingBrief,
-      request_plan: buildRequestPlan({
-        userIntent: input.userIntent,
-        operatingBrief,
-        recommendedScope: alignment.scopeGuidance,
-      }),
+      request_plan: requestPlan,
       recommended_scope: alignment.scopeGuidance,
       recommended_next_steps: buildRecommendedNextSteps({
         alignment,
@@ -2284,7 +2333,25 @@ export class MemoryService {
         actionability: actionPlan.actionability,
       }),
       write_back_policy: writeBackPolicy,
+      retrieval_guidance: retrievalGuidance(),
+      payload_budget: responseMode === "expanded"
+        ? { max_bytes: null, serialized_bytes: null, trimmed: false }
+        : { max_bytes: 0, serialized_bytes: 0, trimmed: false },
     };
+    if (responseMode === "expanded") {
+      return response;
+    }
+
+    const compactStrategy = compactStrategyContext(strategy.strategy_context);
+    return enforceCompactSessionBudget({
+      ...response,
+      context_resolution: compactContextResolution(resolution),
+      strategy_context: compactStrategy,
+      grouped_memory: memory ? compactSearchMemory(memory) : null,
+      active_tasks: compactTasks(activeTasks),
+      relevant_assets: compactStrategy.assets,
+      operating_brief: compactOperatingBrief(operatingBrief),
+    });
   }
 
   private async buildAlignmentAssessment(input: {

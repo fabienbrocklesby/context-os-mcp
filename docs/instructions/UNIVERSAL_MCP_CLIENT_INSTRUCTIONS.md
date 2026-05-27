@@ -17,6 +17,8 @@ Before meaningful work:
 6. If context is ambiguous, call resolve_context.
 7. For more recall, call search_memory(project, query, scope). Use scope project, initiative, entity, or all_related.
 
+prepare_assistant_session and plan_request return compact, response-budgeted packs by default. The current_context field is a document manifest rather than a bulk document export. Retrieve full material only as needed using search_memory, resolve_current_truth, get_current_context with a focused query, or fetch. Request response_mode="expanded" only for deliberate diagnostics or compatibility inspection.
+
 Current truth rule:
 
 Old semantic chunks are background, not current reality. For people, deals, budgets, blockers, email replies, customer status, current priorities, calendar availability, deployment state, repo state, prices, and other volatile facts, prefer live tools and current_truth/entity states. If current_truth warns that state is missing, stale, or unverified, say so and follow recommended_live_mcp_checks before recommending action.

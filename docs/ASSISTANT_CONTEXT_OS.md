@@ -12,9 +12,11 @@ Assistant Context OS is the orchestration layer on top of durable memory. It hel
 
 1. Start meaningful work with `prepare_assistant_session`, including `environment`, `available_tools`, and `active_sources` when the client knows them.
 2. For planning, prioritization, repo work, day/week plans, or "what should I do next?" requests, call `plan_request`.
-3. Follow `operating_brief.environment_tool_guidance` and `operating_brief.required_live_checks`.
+3. Both calls return compact context packs by default. Follow `operating_brief.environment_tool_guidance` and `operating_brief.required_live_checks`.
 4. Answer or act only after required checks are complete, explicitly unavailable, or user-approved to skip.
 5. Close meaningful work with `finish_work_session` and structured writes when useful.
+
+Compact packs keep required safety/current-truth guidance and high-signal excerpts in the model context window. They expose a current-context manifest instead of embedding every full document. Use `search_memory`, `resolve_current_truth`, `get_current_context` with a focused query, or `fetch` for relevant deep source material. Request `response_mode: "expanded"` only for deliberate diagnostics or compatibility inspection.
 
 ## Operating Brief Fields
 
@@ -38,7 +40,7 @@ ContextOS is a control plane, not a hard-coded adapter bus for every live system
 
 - `plan_environment_tool_use` accepts `environment`, `user_intent`, `project_or_topic`, `available_tools`, `active_sources`, and optional `proposed_action`.
 - It returns which checks ContextOS can execute directly, which checks the AI client must execute with its own tools, what requires confirmation, what is unavailable, and how to write back safely.
-- `prepare_assistant_session` and `plan_request` embed the same guidance in `environment_tool_guidance`.
+- Compact `prepare_assistant_session` and `plan_request` responses embed the same guidance in `environment_tool_guidance` without exporting broad document bodies by default.
 - If a host lacks GitHub, CRM, email, calendar, Shopify, Cloudflare, terminal, or other live tools, the assistant must say what was not checked and reduce confidence.
 
 ## Project-Specific Live State

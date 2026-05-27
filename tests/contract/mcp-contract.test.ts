@@ -48,8 +48,9 @@ vi.mock("~/domain/service", () => {
       return { items: [] };
     }
 
-    async prepareAssistantSession() {
+    async prepareAssistantSession(input?: { responseMode?: "compact" | "expanded" }) {
       return {
+        response_mode: input?.responseMode ?? "compact",
         active_project: {
           slug: "memory-system-mcp",
           displayName: "Memory System MCP",
@@ -348,8 +349,9 @@ vi.mock("~/domain/service", () => {
       };
     }
 
-    async planRequest() {
+    async planRequest(input?: { responseMode?: "compact" | "expanded" }) {
       return {
+        response_mode: input?.responseMode ?? "compact",
         strategy_context: { project: "memory-system-mcp", warnings: ["no_active_vision"] },
         alignment_assessment: { alignmentLabel: "unknown_until_more_context" },
         operating_brief: {
@@ -633,6 +635,54 @@ describe("MCP contract", () => {
       },
     });
     expect(payload.recommended_live_mcp_checks[0]).toContain("github");
+  });
+
+  it("allows clients to explicitly opt into expanded assistant session material", async () => {
+    const client = await connectTestClient(env, principal);
+
+    const response = await client.callTool({
+      name: "prepare_assistant_session",
+      arguments: {
+        project_or_topic: "memory-system-mcp",
+        user_intent: "inspect full context",
+        response_mode: "expanded",
+      },
+    });
+    const payload = JSON.parse(readFirstTextContent(response));
+
+    expect(payload.response_mode).toBe("expanded");
+  });
+
+  it("allows clients to explicitly opt into expanded request planning material", async () => {
+    const client = await connectTestClient(env, principal);
+
+    const response = await client.callTool({
+      name: "plan_request",
+      arguments: {
+        project_or_topic: "memory-system-mcp",
+        user_intent: "inspect detailed planning context",
+        response_mode: "expanded",
+      },
+    });
+    const payload = JSON.parse(readFirstTextContent(response));
+
+    expect(payload.response_mode).toBe("expanded");
+  });
+
+  it("serializes JSON tool results without whitespace-only context expansion", async () => {
+    const client = await connectTestClient(env, principal);
+
+    const response = await client.callTool({
+      name: "prepare_assistant_session",
+      arguments: {
+        project_or_topic: "memory-system-mcp",
+        user_intent: "compact output",
+      },
+    });
+    const text = readFirstTextContent(response);
+
+    expect(text).not.toMatch(/\n\s+"/);
+    expect(JSON.parse(text).response_mode).toBe("compact");
   });
 
   it("returns reliability core MCP payloads", async () => {
