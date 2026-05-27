@@ -323,6 +323,7 @@ describe("MemoryService assistant session reliability planning", () => {
     );
     expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(64 * 1024);
   });
 
   it("retains full current-context material only when expanded session mode is requested", async () => {
@@ -457,6 +458,10 @@ describe("MemoryService assistant session reliability planning", () => {
     });
     expect(result.payload_budget.serialized_bytes).toBeLessThanOrEqual(64 * 1024);
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(64 * 1024);
+    expect(result.operating_brief.current_tasks_milestones).toMatchObject({
+      detail_location: "active_tasks",
+    });
   });
 
   it("adds the Light Lane sales proposal context pack and quality gates to plan_request", async () => {

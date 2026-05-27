@@ -158,14 +158,20 @@ export function compactStrategyContext(strategy: unknown) {
   };
 }
 
-export function compactOperatingBrief(brief: unknown) {
+export function compactOperatingBrief(
+  brief: unknown,
+  taskDetailLocation: "tasks" | "active_tasks" = "tasks",
+) {
   const payload = asRecord(brief);
   const taskPayload = asRecord(payload.current_tasks_milestones);
   const freshness = asRecord(payload.source_freshness);
   const strategic = asRecord(payload.strategic_alignment);
+  const environmentGuidance = asRecord(payload.environment_tool_guidance);
   return {
     ...payload,
-    context_resolution: compactContextResolution(asRecord(payload.context_resolution)),
+    context_resolution: {
+      detail_location: "context_resolution",
+    },
     strategic_alignment: {
       ...strategic,
       visions: compactUnknownStrategic(asArray(strategic.visions)),
@@ -176,9 +182,10 @@ export function compactOperatingBrief(brief: unknown) {
     },
     relevant_assets: asArray(payload.relevant_assets).slice(0, 8).map((asset) => compactAsset(asRecord(asset))),
     current_tasks_milestones: {
-      open_tasks: compactUnknownTasks(asArray(taskPayload.open_tasks)),
-      due_or_blocked_tasks: compactUnknownTasks(asArray(taskPayload.due_or_blocked_tasks)),
-      high_priority_tasks: compactUnknownTasks(asArray(taskPayload.high_priority_tasks)),
+      detail_location: taskDetailLocation,
+      open_task_ids: compactItemIds(asArray(taskPayload.open_tasks)),
+      due_or_blocked_task_ids: compactItemIds(asArray(taskPayload.due_or_blocked_tasks)),
+      high_priority_task_ids: compactItemIds(asArray(taskPayload.high_priority_tasks)),
       milestones: compactUnknownStrategic(asArray(taskPayload.milestones)),
       overdue_markers: taskPayload.overdue_markers,
     },
@@ -186,6 +193,10 @@ export function compactOperatingBrief(brief: unknown) {
       ...freshness,
       diagnostics: compactDiagnostics(freshness.diagnostics),
       last_known_source_event: compactOneSourceEvent(freshness.last_known_source_event),
+    },
+    environment_tool_guidance: {
+      detail_location: "environment_tool_guidance",
+      write_back_policy: environmentGuidance.write_back_policy,
     },
   };
 }
@@ -327,6 +338,10 @@ function compactUnknownTasks(tasks: unknown[]) {
       dueAt: item.dueAt,
     };
   });
+}
+
+function compactItemIds(items: unknown[]) {
+  return items.slice(0, MAX_TASKS).map((item) => asRecord(item).id).filter(Boolean);
 }
 
 function compactUnknownFacts(facts: unknown[]) {

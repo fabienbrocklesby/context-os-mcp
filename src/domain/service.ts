@@ -2350,7 +2350,7 @@ export class MemoryService {
       grouped_memory: memory ? compactSearchMemory(memory) : null,
       active_tasks: compactTasks(activeTasks),
       relevant_assets: compactStrategy.assets,
-      operating_brief: compactOperatingBrief(operatingBrief),
+      operating_brief: compactOperatingBrief(operatingBrief, "active_tasks"),
     });
   }
 
