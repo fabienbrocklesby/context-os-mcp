@@ -3405,6 +3405,31 @@ export class MemoryRepository {
       )
       .run();
   }
+
+  async getAllDocumentsForLayerBackfill(): Promise<
+    Array<{ id: string; path: string; memory_type: string; canonical: boolean; memory_layer: string | null }>
+  > {
+    const rows = await this.db
+      .prepare(
+        "SELECT id, path, memory_type, canonical, memory_layer FROM documents ORDER BY created_at ASC",
+      )
+      .all<{ id: string; path: string; memory_type: string; canonical: number; memory_layer: string | null }>();
+    return rows.results.map((row) => ({
+      id: row.id,
+      path: row.path,
+      memory_type: row.memory_type,
+      canonical: row.canonical === 1,
+      memory_layer: row.memory_layer,
+    }));
+  }
+
+  async setDocumentMemoryLayer(documentId: string, layer: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db
+      .prepare("UPDATE documents SET memory_layer = ?, updated_at = ? WHERE id = ?")
+      .bind(layer, now, documentId)
+      .run();
+  }
 }
 
 function mapDocument(row?: DocumentRow | null): ResolvedMemoryDocument | null {

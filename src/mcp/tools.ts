@@ -2685,6 +2685,24 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   );
 
   server.registerTool(
+    "backfill_memory_layers",
+    {
+      description:
+        "Assign memory_layer to all existing documents that do not yet have one, based on their memory_type and canonical flag. Run with dry_run=true first to preview. Apply with dry_run=false.",
+      inputSchema: z.object({
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe("Default true. Set to false to actually apply the backfill."),
+      }),
+    },
+    async (input) => {
+      const result = await service.backfillMemoryLayers({ dryRun: input.dry_run !== false });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
     "analyze_memory_migration",
     {
       description:

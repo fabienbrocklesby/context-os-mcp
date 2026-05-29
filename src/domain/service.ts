@@ -3266,6 +3266,45 @@ export class MemoryService {
     return runReconciliation(this.env, "manual");
   }
 
+  async backfillMemoryLayers(input: { dryRun?: boolean } = {}): Promise<{
+    updated: number;
+    skipped: number;
+    dry_run: boolean;
+    samples: Array<{ path: string; memory_type: string; canonical: boolean; assigned_layer: string }>;
+  }> {
+    const dryRun = input.dryRun !== false;
+
+    const rows = await this.repo.getAllDocumentsForLayerBackfill();
+    let updated = 0;
+    let skipped = 0;
+    const samples: Array<{ path: string; memory_type: string; canonical: boolean; assigned_layer: string }> = [];
+
+    for (const row of rows) {
+      if (row.memory_layer) {
+        skipped++;
+        continue;
+      }
+
+      const layer = inferMemoryLayer(row.memory_type, row.canonical);
+
+      if (samples.length < 20) {
+        samples.push({
+          path: row.path,
+          memory_type: row.memory_type,
+          canonical: row.canonical,
+          assigned_layer: layer,
+        });
+      }
+
+      if (!dryRun) {
+        await this.repo.setDocumentMemoryLayer(row.id, layer);
+      }
+      updated++;
+    }
+
+    return { updated, skipped, dry_run: dryRun, samples };
+  }
+
   async retrievalDiagnostics(input: {
     query: string;
     project?: string;
@@ -6917,4 +6956,22 @@ function deriveExcludeLayers(intent: RetrievalIntent): MemoryLayer[] {
     return ["event_log"];
   }
   return [];
+}
+
+function inferMemoryLayer(
+  memoryType: string,
+  canonical: boolean,
+): "situation" | "knowledge" | "operational" | "event_log" {
+  if (memoryType === "session_summary" || memoryType === "historical_note") {
+    return "event_log";
+  }
+  if (
+    memoryType === "decision" ||
+    memoryType === "snippet" ||
+    memoryType === "repo_index" ||
+    (canonical && memoryType === "current_context")
+  ) {
+    return "knowledge";
+  }
+  return "operational";
 }
