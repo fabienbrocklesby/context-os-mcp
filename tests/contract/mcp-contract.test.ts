@@ -5,6 +5,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { MemoryPrincipal } from "~/domain/memory";
 
 vi.mock("~/domain/service", () => {
+  // MemoryService is no longer wired into the MCP server. Keep a minimal stub
+  // so legacy unit tests that still import from this module don't break.
   class MockMemoryService {
     async searchMemory() {
       return {
@@ -747,11 +749,6 @@ describe("MCP contract", () => {
         "upsert_entity_state",
         "get_entity_current_state",
         "resolve_current_truth",
-        "analyze_context_truth_migration",
-        "run_context_truth_migration",
-        "import_ai_brain_vault",
-        "analyze_light_lane_memory_recovery",
-        "run_light_lane_memory_recovery",
         "upsert_task",
         "daily_briefing",
         "context_health_check",
@@ -761,12 +758,6 @@ describe("MCP contract", () => {
         "admin_reconcile_workdrive",
         "admin_reindex_document",
         "admin_reindex_all",
-        "analyze_memory_migration",
-        "run_memory_migration",
-        "get_migration_audit",
-        "analyze_workdrive_canonicalization",
-        "run_workdrive_canonicalization",
-        "get_workdrive_canonicalization_manifest",
         "retrieval_diagnostics",
       ]),
     );

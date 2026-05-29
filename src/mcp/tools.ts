@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { loadConfig } from "~/config/env";
 import type { MemoryPrincipal } from "~/domain/memory";
-import { MemoryService } from "~/domain/service";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { ZohoWorkDriveClient } from "~/integrations/zoho/client";
 import { DocumentRepository } from "~/persistence/d1/DocumentRepository";
@@ -48,9 +47,6 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
     retrievalSvc, initiativeSvc, docSvc, config,
   );
 
-  // Legacy service for migration tools not yet extracted
-  const legacySvc = new MemoryService(env, principal);
-
   // Register tool groups
   registerProjectTools(server, projectSvc);
   registerGithubTools(server, projectSvc, docSvc);
@@ -58,7 +54,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   registerRetrievalTools(server, retrievalSvc, docSvc);
   registerMemoryTools(server, entitySvc, docSvc);
   registerInitiativeTools(server, initiativeSvc);
-  registerAdminTools(server, docSvc, legacySvc);
+  registerAdminTools(server, docSvc);
 
   return server;
 }

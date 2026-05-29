@@ -24,7 +24,7 @@ import {
 import {
   buildLightLaneLiveStatePlan,
   buildZohoExternalWritePlan,
-} from "~/domain/light-lane-live-state";
+} from "~/domain/zoho-planning";
 import { buildOperatingBrief, buildRequestPlan } from "~/domain/operating-brief";
 import {
   buildLogicalPath,

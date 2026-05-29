@@ -7,7 +7,7 @@ import {
   planEnvironmentToolUse,
 } from "~/domain/environment-capabilities";
 import { parseMarkdownDocument } from "~/domain/frontmatter";
-import { buildLightLaneLiveStatePlan, buildZohoExternalWritePlan } from "~/domain/light-lane-live-state";
+import { buildLightLaneLiveStatePlan, buildZohoExternalWritePlan } from "~/domain/zoho-planning";
 import {
   buildLogicalPath,
   buildMarkdownDocument,
