@@ -58,7 +58,7 @@ import {
   enforceCompactSessionBudget,
   retrievalGuidance,
   type AssistantSessionResponseMode,
-} from "~/domain/session-payload";
+} from "~/domain/session";
 import type { DocumentRepository } from "~/persistence/d1/DocumentRepository";
 import type { EntityRepository } from "~/persistence/d1/EntityRepository";
 import type { InitiativeRepository } from "~/persistence/d1/InitiativeRepository";

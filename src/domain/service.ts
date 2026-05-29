@@ -85,7 +85,7 @@ import {
   enforceCompactSessionBudget,
   retrievalGuidance,
   type AssistantSessionResponseMode,
-} from "~/domain/session-payload";
+} from "~/domain/session";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { embedTexts } from "~/integrations/workers-ai/embeddings";
 import { queryMemoryIndexWithDiagnostics, replaceDocumentVectors, deleteVectors } from "~/integrations/vectorize/client";

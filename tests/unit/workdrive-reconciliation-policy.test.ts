@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldReindexWorkDriveEntry } from "~/domain/service";
+import { shouldReindexWorkDriveEntry } from "~/domain/queue";
 
 describe("WorkDrive reconciliation policy", () => {
   it("treats historical documents indexed as inactive as stale so they become searchable", () => {

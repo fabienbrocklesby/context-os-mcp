@@ -20,7 +20,7 @@ import {
   reindexWorkDriveDocument,
   runReconciliation,
   type IndexQueueMessage,
-} from "~/domain/service";
+} from "~/domain/queue";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { ZohoWorkDriveClient, type ZohoFile } from "~/integrations/zoho/client";
 import type { DocumentRepository } from "~/persistence/d1/DocumentRepository";

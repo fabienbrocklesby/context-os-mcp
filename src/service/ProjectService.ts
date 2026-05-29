@@ -18,7 +18,7 @@ import {
   type MemoryPrincipal,
   type MemoryProject,
 } from "~/domain/memory";
-import { indexMarkdownDocument, type IndexQueueMessage } from "~/domain/service";
+import { indexMarkdownDocument, type IndexQueueMessage } from "~/domain/queue";
 import { GithubOAuthClient } from "~/integrations/github/client";
 import { ZohoWorkDriveClient, type ZohoFile } from "~/integrations/zoho/client";
 import type { DocumentRepository } from "~/persistence/d1/DocumentRepository";

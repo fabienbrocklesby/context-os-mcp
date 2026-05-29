@@ -1,6 +1,6 @@
 import { loadConfig } from "~/config/env";
 import type { MemoryPrincipal } from "~/domain/memory";
-import { processIndexQueueMessage, runReconciliation } from "~/domain/service";
+import { processIndexQueueMessage, runReconciliation } from "~/domain/queue";
 import { oauthProvider } from "~/auth/oauth";
 
 const BEARER_PRINCIPAL: MemoryPrincipal = {
@@ -32,7 +32,7 @@ export default {
   async queue(batch, env, _ctx) {
     for (const message of batch.messages) {
       try {
-        await processIndexQueueMessage(env, message.body as import("~/domain/service").IndexQueueMessage);
+        await processIndexQueueMessage(env, message.body as import("~/domain/queue").IndexQueueMessage);
         message.ack();
       } catch (error) {
         console.error("Queue processing failed", error);

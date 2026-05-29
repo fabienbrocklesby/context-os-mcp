@@ -15,8 +15,8 @@ vi.mock("~/integrations/zoho/client", () => ({
   },
 }));
 
-vi.mock("~/persistence/d1/repository", () => ({
-  MemoryRepository: class {
+vi.mock("~/persistence/d1/DocumentRepository", () => ({
+  DocumentRepository: class {
     async getDocumentByWorkDriveFileId() {
       return null;
     }
@@ -59,7 +59,7 @@ describe("indexing flow", () => {
   });
 
   it("orchestrates download, chunking, embeddings, vector upsert, and repository persistence", async () => {
-    const { reindexWorkDriveDocument } = await import("~/domain/service");
+    const { reindexWorkDriveDocument } = await import("~/domain/queue");
 
     downloadMarkdown.mockResolvedValue({
       file: {
@@ -157,7 +157,7 @@ Vectorize stores chunk embeddings for retrieval.`,
   });
 
   it("keeps historical session summaries active for background retrieval", async () => {
-    const { reindexWorkDriveDocument } = await import("~/domain/service");
+    const { reindexWorkDriveDocument } = await import("~/domain/queue");
 
     downloadMarkdown.mockResolvedValue({
       file: {
