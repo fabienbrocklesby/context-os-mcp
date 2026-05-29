@@ -914,6 +914,21 @@ export class DocumentRepository {
       .bind(layer, now, documentId)
       .run();
   }
+
+  async getAdminStatus() {
+    const [projects, failedJobs, queuedJobs, lastSync] = await Promise.all([
+      this.db.prepare("SELECT COUNT(*) as count FROM projects").first<{ count: number }>(),
+      this.db.prepare("SELECT COUNT(*) as count FROM reindex_jobs WHERE status = 'failed'").first<{ count: number }>(),
+      this.db.prepare("SELECT COUNT(*) as count FROM reindex_jobs WHERE status = 'queued'").first<{ count: number }>(),
+      this.db.prepare("SELECT * FROM sync_runs ORDER BY created_at DESC LIMIT 1").first<Record<string, unknown>>(),
+    ]);
+    return {
+      project_count: projects?.count ?? 0,
+      failed_reindex_jobs: failedJobs?.count ?? 0,
+      queued_reindex_jobs: queuedJobs?.count ?? 0,
+      last_sync: lastSync ?? null,
+    };
+  }
 }
 
 // Module-level helpers
