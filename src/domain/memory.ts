@@ -17,6 +17,9 @@ export const memoryStatusSchema = z.enum([
   "archived",
 ]);
 
+export const memoryLayerSchema = z.enum(["situation", "knowledge", "operational", "event_log"]);
+export type MemoryLayer = z.infer<typeof memoryLayerSchema>;
+
 export const frontmatterSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -37,6 +40,7 @@ export const frontmatterSchema = z.object({
   supersedes: z.array(z.string()).default([]),
   superseded_by: z.array(z.string()).default([]),
   canonical: z.boolean().default(false),
+  memory_layer: memoryLayerSchema.optional(),
 });
 
 export type MemoryFrontmatter = z.infer<typeof frontmatterSchema>;
@@ -98,6 +102,7 @@ export type MemorySearchHit = {
   score: number;
   updatedAtUnix: number;
   url?: string;
+  memoryLayer?: MemoryLayer;
 };
 
 export type ResolvedMemoryDocument = {
@@ -129,6 +134,7 @@ export type ResolvedMemoryDocument = {
   bodyMarkdown?: string;
   frontmatter?: MemoryFrontmatter;
   lastRemoteModifiedAt?: number | null;
+  memoryLayer?: MemoryLayer | null;
 };
 
 export type ChunkRecord = {
