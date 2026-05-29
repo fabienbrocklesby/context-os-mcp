@@ -56,8 +56,10 @@ import {
   type StrategyAsset,
   type StrategyMilestone,
   type StrategyNode,
+  type MemoryLayer,
 } from "~/domain/memory";
 import { rerankSearchHits } from "~/domain/ranking";
+import { classifyRequest, deriveRetrievalIntent, type RetrievalIntent } from "~/domain/request-classification";
 import {
   applyDocumentDiversity,
   buildRequiredContextPack,
@@ -611,6 +613,7 @@ export class MemoryService {
     initiative?: string;
     entityId?: string;
     taskProfile?: TaskProfile;
+    retrieval_intent?: RetrievalIntent;
   }) {
     const scope = input.scope ?? "project";
     if (scope === "project") {
@@ -708,6 +711,7 @@ export class MemoryService {
     tags?: string[];
     scope?: AssistantSearchScope;
     taskProfile?: TaskProfile;
+    retrieval_intent?: RetrievalIntent;
   }) {
     const normalizedProject = normalizeProject(input.project);
     const taskProfile = input.taskProfile ?? inferTaskProfile(input.query);
@@ -857,6 +861,12 @@ export class MemoryService {
                 project: normalizedProject,
                 repo: input.repo,
                 path: input.path,
+                excludeLayers: deriveExcludeLayers(
+                  input.retrieval_intent ?? deriveRetrievalIntent(
+                    classifyRequest(input.query),
+                    input.query,
+                  ),
+                ),
               }),
               {
                 maxChunksPerDocument: 2,
@@ -6762,4 +6772,11 @@ async function sha256Hex(input: string) {
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function deriveExcludeLayers(intent: RetrievalIntent): MemoryLayer[] {
+  if (intent === "planning" || intent === "general" || intent === "status") {
+    return ["event_log"];
+  }
+  return [];
 }
