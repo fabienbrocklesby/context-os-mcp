@@ -2838,6 +2838,79 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
       textResult(await service.retrievalDiagnostics({ query, project, repo, path })),
   );
 
+  server.registerTool(
+    "upsert_situation",
+    {
+      description:
+        "Create or update the cross-initiative situational awareness document. Include your current financial position, location, top priorities this week, and key constraints. The AI reads this first on every session to enable intelligent cross-initiative advice.",
+      inputSchema: z.object({
+        financial_position: z
+          .string()
+          .optional()
+          .describe("Current financial position, e.g. 'Cash tight, need $X by end of month'"),
+        location: z.string().optional().describe("Where you are and where you're going"),
+        top_priorities: z
+          .array(z.string())
+          .optional()
+          .describe("Your top 3-5 priorities this week across all initiatives"),
+        key_constraints: z
+          .array(z.string())
+          .optional()
+          .describe("Constraints limiting your options right now"),
+        active_initiatives: z
+          .array(z.string())
+          .optional()
+          .describe("Which initiatives are actively in play right now"),
+        notes: z.string().optional().describe("Any other situational context worth capturing"),
+      }),
+    },
+    async (input) => {
+      const result = await service.setSituationDocument(input);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    "set_entity_actionability",
+    {
+      description:
+        "Set the actionability of an entity state without replacing the full state. Use this when a deal is blocked, waiting, or ready — so planning queries surface only what you can actually act on.",
+      inputSchema: z.object({
+        project: z.string().describe("Project slug the entity belongs to"),
+        entity_slug: z.string().describe("Slug of the entity to update"),
+        state_key: z
+          .string()
+          .describe("The state key to update, e.g. 'deal_stage', 'project_status'"),
+        actionability: z
+          .enum(["active", "ready", "waiting", "blocked", "unknown"])
+          .describe(
+            "active: being worked now; ready: can act on it; waiting: waiting on external input; blocked: hard blocker exists; unknown: not assessed",
+          ),
+        resolve_after: z
+          .string()
+          .optional()
+          .describe(
+            "ISO date after which to re-evaluate (e.g. 2026-12-01 for a deal blocked until December)",
+          ),
+        reason: z
+          .string()
+          .optional()
+          .describe("Why this actionability state — recorded for your own reference"),
+      }),
+    },
+    async (input) => {
+      const result = await service.setEntityActionability({
+        project: input.project,
+        entitySlug: input.entity_slug,
+        stateKey: input.state_key,
+        actionability: input.actionability,
+        resolveAfter: input.resolve_after,
+        reason: input.reason,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
   return server;
 }
 

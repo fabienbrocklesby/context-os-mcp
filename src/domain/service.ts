@@ -1687,6 +1687,38 @@ export class MemoryService {
     return { project, entity, aliases, state };
   }
 
+  async setEntityActionability(input: {
+    project: string;
+    entitySlug: string;
+    stateKey: string;
+    actionability: "active" | "ready" | "waiting" | "blocked" | "unknown";
+    resolveAfter?: string;
+    reason?: string;
+  }) {
+    const project = normalizeProject(input.project);
+    const entity = await this.repo.getEntityBySlug(project, input.entitySlug);
+    if (!entity) {
+      throw new Error(`Entity not found: ${input.entitySlug} in project ${project}`);
+    }
+
+    await this.repo.updateEntityStateActionability({
+      project,
+      entityId: entity.id,
+      stateKey: input.stateKey,
+      actionability: input.actionability,
+      resolveAfter: input.resolveAfter ?? null,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return {
+      entity_slug: input.entitySlug,
+      state_key: input.stateKey,
+      actionability: input.actionability,
+      resolve_after: input.resolveAfter ?? null,
+      reason: input.reason ?? null,
+    };
+  }
+
   async getEntityCurrentState(input: {
     project?: string;
     entityId?: string;
@@ -2967,6 +2999,91 @@ export class MemoryService {
       job_id: jobId,
       history_snapshot: historyResult,
     };
+  }
+
+  async setSituationDocument(input: {
+    financial_position?: string;
+    location?: string;
+    top_priorities?: string[];
+    key_constraints?: string[];
+    active_initiatives?: string[];
+    notes?: string;
+  }) {
+    const project = "shared";
+    await this.ensureProject({ project });
+
+    const sections: string[] = ["# Current Situation"];
+
+    if (input.financial_position) {
+      sections.push(`## Financial Position\n${input.financial_position}`);
+    }
+    if (input.location) {
+      sections.push(`## Current Location\n${input.location}`);
+    }
+    if (input.top_priorities?.length) {
+      sections.push(
+        `## Top Priorities\n${input.top_priorities.map((p) => `- ${p}`).join("\n")}`,
+      );
+    }
+    if (input.key_constraints?.length) {
+      sections.push(
+        `## Key Constraints\n${input.key_constraints.map((c) => `- ${c}`).join("\n")}`,
+      );
+    }
+    if (input.active_initiatives?.length) {
+      sections.push(
+        `## Active Initiatives\n${input.active_initiatives.map((i) => `- ${i}`).join("\n")}`,
+      );
+    }
+    if (input.notes) {
+      sections.push(`## Notes\n${input.notes}`);
+    }
+
+    const body = sections.join("\n\n");
+    const path = buildLogicalPath(project, ["context", "current"], "situation.md");
+    const existing = await this.repo.getDocumentByPath(path);
+    const now = new Date().toISOString();
+    const nextRevision = existing ? existing.revision + 1 : 1;
+
+    const frontmatter = applyFrontmatterOverrides(
+      {
+        id: existing?.id ?? crypto.randomUUID(),
+        title: "Current Situation",
+        project,
+        memory_type: "current_context" as const,
+        status: "active" as const,
+        revision: nextRevision,
+        tags: ["situation", "personal"],
+        created_at: now,
+        updated_at: now,
+        author_client: this.principal.login,
+        canonical: true,
+        source_urls: [],
+        supersedes: [],
+        superseded_by: [],
+        memory_layer: "situation" as const,
+      },
+      {},
+    );
+
+    const markdown = buildMarkdownDocument(frontmatter, body);
+    const folders = await resolveMemoryFolders(this.zoho, this.config, project);
+    const uploaded = await this.zoho.uploadMarkdownFile({
+      folderId: existing?.parentFolderId ?? folders.contextCurrent.id,
+      fileName: "situation.md",
+      markdown,
+      overrideExisting: Boolean(existing),
+    });
+
+    const jobId = await this.indexUploadedMarkdownAndRecordJob({
+      file: uploaded,
+      path,
+      reason: "situation document write",
+      project,
+      markdown,
+    });
+
+    return { path, workdrive_file_id: uploaded.id, job_id: jobId };
   }
 
   async archiveMemoryDocument(input: {

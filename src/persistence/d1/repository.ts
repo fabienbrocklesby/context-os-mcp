@@ -3371,6 +3371,40 @@ export class MemoryRepository {
       )
       .run();
   }
+
+  async getEntityBySlug(project: string, slug: string): Promise<MemoryEntity | null> {
+    return mapEntity(
+      await this.db
+        .prepare("SELECT * FROM memory_entities WHERE project = ? AND slug = ?")
+        .bind(project, slug)
+        .first<EntityRow>(),
+    );
+  }
+
+  async updateEntityStateActionability(input: {
+    project: string;
+    entityId: string;
+    stateKey: string;
+    actionability: string;
+    resolveAfter: string | null;
+    updatedAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE entity_states
+         SET actionability = ?, resolve_after = ?, updated_at = ?
+         WHERE project = ? AND entity_id = ? AND state_key = ? AND status = 'active'`,
+      )
+      .bind(
+        input.actionability,
+        input.resolveAfter,
+        input.updatedAt,
+        input.project,
+        input.entityId,
+        input.stateKey,
+      )
+      .run();
+  }
 }
 
 function mapDocument(row?: DocumentRow | null): ResolvedMemoryDocument | null {
