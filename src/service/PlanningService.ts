@@ -686,7 +686,7 @@ export class PlanningService {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  private async resolveContext(input: { projectOrTopic?: string; userIntent?: string }) {
+  async resolveContext(input: { projectOrTopic?: string; userIntent?: string }) {
     const projects = await this.projectRepo.listProjects();
     const raw = input.projectOrTopic?.trim();
     const normalized = raw ? normalizeProject(raw) : null;

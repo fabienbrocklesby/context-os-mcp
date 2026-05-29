@@ -1464,9 +1464,11 @@ export class DocumentService {
       maxBytes?: number;
       authorClient?: string;
     },
-    github: GithubOAuthClient,
+    github?: GithubOAuthClient,
   ) {
-    const file = await github.getFile({
+    const gh = github ?? this.github;
+    if (!gh) throw new Error("GitHub client not configured");
+    const file = await gh.getFile({
       repo: input.repo,
       path: input.path,
       ref: input.ref,

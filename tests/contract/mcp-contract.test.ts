@@ -471,6 +471,193 @@ vi.mock("~/domain/service", () => {
   };
 });
 
+vi.mock("~/service/PlanningService", () => {
+  class MockPlanningService {
+    async prepareAssistantSession(input?: { responseMode?: "compact" | "expanded" }) {
+      return {
+        response_mode: input?.responseMode ?? "compact",
+        active_project: { slug: "memory-system-mcp", displayName: "Memory System MCP" },
+        context_resolution: { project_switching: { selected: "memory-system-mcp", reason: "Exact match." } },
+        grouped_memory: { grouped: { current_context: [] } },
+        recommended_live_mcp_checks: ["Check live github for fresh context before writing durable summaries."],
+        write_back_policy: { mode: "selective_durable_facts" },
+        strategy_context: { project: "memory-system-mcp", visions: [], warnings: ["no_active_vision"] },
+        operational_context: { timezone: "Pacific/Auckland", weekday: "Saturday", is_weekend: true },
+        request_classification: { primary_category: "planning_scheduling" },
+        actionability: { label: "prep_or_async_only" },
+        tool_plan: { required_tools: [] },
+        operating_brief: {
+          context_resolution: { project_switching: { selected: "memory-system-mcp" } },
+          time_actionability: { weekday: "Saturday", actionability_label: "prep_or_async_only" },
+          strategic_alignment: { project: "memory-system-mcp", assessment: null },
+          relevant_assets: [],
+          current_tasks_milestones: { open_tasks: [], milestones: [] },
+          source_freshness: { retrieval_mode: "no_hits", warnings: [] },
+          required_live_checks: [],
+          risks: [],
+          recommended_next_actions: {
+            before_answer: [], before_action: [],
+            safe_now: ["Do prep, admin, drafting, review, or asynchronous work."],
+            defer_until: null, needs_user_confirmation: [],
+          },
+          write_back_plan: {
+            recommendations: [{ tool: "finish_work_session" }],
+            forbidden_content: ["secrets or credentials"],
+          },
+        },
+      };
+    }
+
+    async prepareWorkSession() { return { project: "memory-system-mcp", context: [] }; }
+    async resolveContext() { return { active_project: { slug: "memory-system-mcp" }, candidates: [], project_switching: { selected: "memory-system-mcp" } }; }
+    async planRequest(input?: { responseMode?: "compact" | "expanded" }) {
+      return {
+        response_mode: input?.responseMode ?? "compact",
+        strategy_context: { project: "memory-system-mcp", warnings: ["no_active_vision"] },
+        alignment_assessment: { alignmentLabel: "unknown_until_more_context" },
+        operating_brief: { required_live_checks: [], write_back_plan: { recommendations: [{ tool: "finish_work_session" }] } },
+        request_plan: { objective: "Improve assistant planning.", tool_sequence: [] },
+        recommended_next_steps: [],
+      };
+    }
+    async dailyBriefing() { return { due_or_upcoming_tasks: [], active_initiatives: [] }; }
+    async contextHealthCheck() { return { warnings: [] }; }
+    async checkAlignment() { return { alignment_assessment: { alignmentLabel: "unknown_until_more_context", score: 0, confidence: "low" } }; }
+  }
+  return { PlanningService: MockPlanningService };
+});
+
+vi.mock("~/service/RetrievalService", () => {
+  class MockRetrievalService {
+    async searchMemory() {
+      return {
+        results: [{ id: "doc-1", title: "Vision", path: "/memory/shared/context/current/vision.md", url: "https://memory.example.com/doc-1", text: "Canonical truth", score: 0.91, memory_type: "current_context", status: "active", heading_path: "Vision" }],
+        documents: [],
+      };
+    }
+    async retrievalDiagnostics() { return { query: "", namespaces: [], hits: 0 }; }
+    async assessContextCompletenessSafely() { return { completeness: "partial", warnings: [] }; }
+  }
+  return { RetrievalService: MockRetrievalService };
+});
+
+vi.mock("~/service/DocumentService", () => {
+  class MockDocumentService {
+    async getDocument() {
+      return {
+        document: { id: "doc-1", title: "Vision", path: "/memory/shared/context/current/vision.md", permalink: "https://memory.example.com/doc-1", project: "shared", memoryType: "current_context", status: "active", revision: 2 },
+        snapshot: { rawMarkdown: "# Vision\n\nCanonical truth" },
+        authoritative_markdown: "# Vision\n\nCanonical truth",
+      };
+    }
+    async getCurrentContext() { return { items: [] }; }
+    async writeSessionSummary() { return { path: "/memory/shared/sessions/test.md", workdrive_file_id: "wd-1", job_id: "job-1" }; }
+    async saveSnippet() { return { path: "/memory/shared/snippets/test.md", workdrive_file_id: "wd-1", job_id: "job-1" }; }
+    async finishWorkSession() { return { session_summary: { path: "/memory/shared/sessions/test.md" } }; }
+    async updateContextDocument() { return { path: "/memory/shared/context/current/vision.md", workdrive_file_id: "wd-1", job_id: "job-1" }; }
+    async archiveMemoryDocument() { return { path: "/memory/shared/context/current/vision.md", workdrive_file_id: "wd-1", job_id: "job-1", archived: true }; }
+    async recordDecision() { return { path: "/memory/shared/decisions/decision.md", workdrive_file_id: "wd-2", job_id: "job-2" }; }
+    async reindexDocument() { return { job_id: "job-3", path: "/memory/shared/context/current/vision.md" }; }
+    async reindexAll() { return { job_id: "job-4" }; }
+    async reconcileWorkDrive() { return { scanned: 0, enqueued: 0 }; }
+    async adminStatus() { return { projects: 0, queued_jobs: 0, failed_jobs: 0 }; }
+    async backfillMemoryLayers() { return { dry_run: true, updated: 0 }; }
+    async setSituationDocument() { return { path: "/memory/shared/context/current/situation.md", workdrive_file_id: "wd-1", job_id: "job-1" }; }
+    async bootstrapProjectContext() { return { project: "test", created: [] }; }
+    async saveGithubFileMemory() { return { path: "/memory/shared/snippets/github.md", workdrive_file_id: "wd-1", job_id: "job-1" }; }
+  }
+  return { DocumentService: MockDocumentService };
+});
+
+vi.mock("~/service/InitiativeService", () => {
+  class MockInitiativeService {
+    async listInitiatives() { return { initiatives: [] }; }
+    async getInitiativeContext() { return { initiative: { slug: "assistant-context-os" }, projects: [] }; }
+    async upsertInitiative() { return { initiative: { slug: "assistant-context-os" } }; }
+    async upsertVision() { return { strategy_node: { slug: "improve-assistant-context", type: "vision" } }; }
+    async listVisions() { return { strategy_nodes: [] }; }
+    async getStrategyContext() {
+      return { strategy_context: { project: "memory-system-mcp", visions: [], pillars: [], outcomes: [], initiatives: [], milestones: [], assets: [], branch_project: null, warnings: ["no_active_vision"] } };
+    }
+    async upsertAsset() { return { asset: { id: "asset-1", slug: "repo-guide" } }; }
+    async listAssets() { return { assets: [] }; }
+    async linkAsset() { return { links: [] }; }
+    async upsertMilestone() { return { milestone: { id: "milestone-1", slug: "prototype-ready" } }; }
+    async createBranchProject() { return { branch_project: { projectSlug: "research-branch" } }; }
+    async checkAlignment() { return { alignment_assessment: { alignmentLabel: "unknown_until_more_context", score: 0, confidence: "low" } }; }
+  }
+  return { InitiativeService: MockInitiativeService };
+});
+
+vi.mock("~/service/EntityService", () => {
+  class MockEntityService {
+    async upsertEntityState() { return { entity: { slug: "fivestar-print" }, entity_state: { stateKey: "deal_stage" } }; }
+    async getEntityCurrentState() { return { entity: null, states: [] }; }
+    async resolveCurrentTruth() { return { entities: [], guardrails: { current_state_required: true }, warnings: [], required_live_checks: [] }; }
+    async setEntityActionability() { return { entity_state: { actionability: "active" } }; }
+    async linkMemory() { return { links: [] }; }
+    async saveSourceEvent() { return { saved: true, source_event: { title: "CRM update" } }; }
+    async extractDurableFacts() { return { facts: [] }; }
+    async upsertTask() { return { task: { title: "Follow up" } }; }
+  }
+  return { EntityService: MockEntityService };
+});
+
+vi.mock("~/service/ProjectService", () => {
+  class MockProjectService {
+    async ensureProject(input: { project?: string }) { return { project: { slug: input.project ?? "shared" } }; }
+    async listProjects() { return { projects: [] }; }
+    async getProject(input: { project: string }) { return { project: { slug: input.project } }; }
+    async updateProjectProfile(input: { project: string }) { return { project: { slug: input.project } }; }
+    async projectStatus(input: { project: string }) { return { project: input.project, folders: {}, failed_jobs: 0 }; }
+
+    getOperationalContext() {
+      return {
+        time_context: {
+          now_utc: "2026-05-01T22:30:00.000Z", timezone: "Pacific/Auckland", timezone_source: "input",
+          local_date: "2026-05-02", local_time: "10:30:00", weekday: "Saturday", weekday_index: 6,
+          utc_offset_minutes: 720, is_weekend: true, is_business_day: false, is_business_hours: false,
+          business_hours: { start: "09:00", end: "17:00", business_days: [1, 2, 3, 4, 5] },
+          holiday_context: { status: "not_configured", is_public_holiday: null, source: null, note: "Public holiday calendars are not configured in Phase 1." },
+        },
+      };
+    }
+
+    planAssistantAction() {
+      return {
+        operational_context: this.getOperationalContext().time_context,
+        request_classification: {
+          primary_category: "planning_scheduling",
+          categories: { planning_scheduling: true, code_repo: false, customer_sales_business: true, memory_context: false, external_source_dependent: false, destructive_write_action: false },
+          matched_rules: ["planning/scheduling terms"],
+          risk_level: "medium",
+        },
+        actionability: { label: "prep_or_async_only", reasons: ["Saturday is not a configured business day."], recommended_now: ["Do prep, admin, drafting, review, or asynchronous work."], guardrails: ["Do not recommend business calls today."] },
+        tool_plan: { required_tools: [{ tool: "get_operational_context", reason: "Validate actual date and weekday.", timing: "before_answer" }], optional_tools: [], forbidden_without_confirmation: [], write_back_recommendations: [], connector_policy_defaults: {} },
+      };
+    }
+
+    planEnvironmentToolUse() { return { environment: { slug: "codex", display_name: "Codex" }, available_capabilities: [{ capability: "contextos_memory" }], unavailable_required_capabilities: [] }; }
+    planLightLaneLiveStateRefresh() { return { eligible: true, mode: "read_only_live_refresh", required_source_kinds: ["zoho_crm", "zoho_mail"] }; }
+    planZohoExternalWrite() { return { contextos_can_execute: false, delegate_to: "write_capable_zoho_mcp", confirmation_required: true }; }
+
+    async listClientEnvironments() { return { environments: [{ slug: "codex", displayName: "Codex" }] }; }
+    async upsertClientEnvironment(input: { slug: string; displayName: string }) { return { environment: { slug: input.slug, displayName: input.displayName } }; }
+    async listToolCapabilities() { return { capabilities: [{ slug: "contextos_memory", displayName: "ContextOS Memory" }] }; }
+    async upsertToolCapability(input: { slug: string; displayName: string }) { return { capability: { slug: input.slug, displayName: input.displayName } }; }
+    async listEnvironmentCapabilities() { return { capabilities: [] }; }
+    async upsertEnvironmentCapability(input: { environmentSlug: string; capabilitySlug: string }) { return { environment_capability: { environmentSlug: input.environmentSlug, capabilitySlug: input.capabilitySlug } }; }
+    async listGithubRepos() { return { repos: [] }; }
+    async associateGithubRepo(input: { project: string; repo: string }) { return { project: input.project, repo: input.repo }; }
+    async listProjectGithubRepos() { return { repos: [] }; }
+    async inspectGithubRepoStructure() { return { tree: [] }; }
+    async indexGithubRepoOverview() { return { files_indexed: 0 }; }
+    async getGithubFile() { return { content: "", path: "", repo: "" }; }
+    async searchGithubCode() { return { results: [] }; }
+  }
+  return { ProjectService: MockProjectService };
+});
+
 describe("MCP contract", () => {
   let env: Env;
   let principal: MemoryPrincipal;
