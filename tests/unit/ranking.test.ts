@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { rerankSearchHits } from "~/domain/ranking";
-import type { MemorySearchHit } from "~/domain/memory";
+import type { MemoryLayer, MemorySearchHit } from "~/domain/memory";
 
 function makeHit(overrides: Partial<MemorySearchHit>): MemorySearchHit {
   return {
@@ -25,6 +25,17 @@ function makeHit(overrides: Partial<MemorySearchHit>): MemorySearchHit {
     updatedAtUnix: Math.floor(Date.now() / 1000),
     ...overrides,
   };
+}
+
+function makeLayeredHit(documentId: string, layer: MemoryLayer, score: number): MemorySearchHit {
+  return makeHit({
+    documentId,
+    score,
+    memoryLayer: layer,
+    memoryType: layer === "event_log" ? "session_summary" : "current_context",
+    status: layer === "event_log" ? ("historical" as const) : ("active" as const),
+    active: layer !== "event_log",
+  });
 }
 
 describe("rerankSearchHits", () => {
@@ -62,5 +73,45 @@ describe("rerankSearchHits", () => {
     ]);
 
     expect(ranked.map((hit) => hit.documentId)).toEqual(["active"]);
+  });
+});
+
+describe("rerankSearchHits with layer filtering", () => {
+  it("excludes event_log hits when excludeLayers includes event_log", () => {
+    const hits = [
+      makeLayeredHit("session-old", "event_log", 0.95),
+      makeLayeredHit("current-state", "operational", 0.7),
+      makeLayeredHit("knowledge-doc", "knowledge", 0.6),
+    ];
+
+    const result = rerankSearchHits(hits, {
+      excludeLayers: ["event_log"],
+      includeSuperseded: true,
+    });
+
+    expect(result.map((h) => h.documentId)).not.toContain("session-old");
+    expect(result.map((h) => h.documentId)).toContain("current-state");
+  });
+
+  it("boosts situation layer docs to the top", () => {
+    const hits = [
+      makeLayeredHit("knowledge-doc", "knowledge", 0.9),
+      makeLayeredHit("situation-doc", "situation", 0.5),
+    ];
+
+    const result = rerankSearchHits(hits, { includeSuperseded: true });
+
+    expect(result[0].documentId).toBe("situation-doc");
+  });
+
+  it("strongly penalises event_log when not excluded but present", () => {
+    const hits = [
+      makeLayeredHit("session-old", "event_log", 0.99),
+      makeLayeredHit("knowledge-doc", "knowledge", 0.6),
+    ];
+
+    const result = rerankSearchHits(hits, { includeSuperseded: true });
+
+    expect(result[0].documentId).toBe("knowledge-doc");
   });
 });
