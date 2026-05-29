@@ -690,6 +690,7 @@ export class DocumentService {
       input.markdown,
       input.authorClient ?? this.principal.login,
     );
+    const bodyWithLinks = await this.appendRelatedSection(project, parsed.body);
     const frontmatter = applyFrontmatterOverrides(parsed.frontmatter, {
       title: input.title,
       project,
@@ -699,7 +700,7 @@ export class DocumentService {
       tags: input.tags ?? parsed.frontmatter.tags,
       author_client: input.authorClient ?? this.principal.login,
     });
-    const markdown = buildMarkdownDocument(frontmatter, parsed.body);
+    const markdown = buildMarkdownDocument(frontmatter, bodyWithLinks);
     const uploaded = await this.zoho.uploadMarkdownFile({
       folderId: folders.sessions.id,
       fileName,
@@ -744,6 +745,7 @@ export class DocumentService {
       input.markdown,
       input.authorClient ?? this.principal.login,
     );
+    const bodyWithLinks = await this.appendRelatedSection(project, parsed.body);
     const frontmatter = applyFrontmatterOverrides(parsed.frontmatter, {
       title: input.title,
       project,
@@ -754,7 +756,7 @@ export class DocumentService {
       supersedes: input.supersedesDocumentIds ?? parsed.frontmatter.supersedes,
       author_client: input.authorClient ?? this.principal.login,
     });
-    const markdown = buildMarkdownDocument(frontmatter, parsed.body);
+    const markdown = buildMarkdownDocument(frontmatter, bodyWithLinks);
     const uploaded = await this.zoho.uploadMarkdownFile({
       folderId: folders.decisions.id,
       fileName,
@@ -839,7 +841,8 @@ export class DocumentService {
       usefulness: input.usefulness,
       author_client: input.authorClient ?? this.principal.login,
     });
-    const markdown = buildMarkdownDocument(frontmatter, parsed.body);
+    const bodyWithLinks = await this.appendRelatedSection(project, parsed.body);
+    const markdown = buildMarkdownDocument(frontmatter, bodyWithLinks);
     const uploaded = await this.zoho.uploadMarkdownFile({
       folderId: folders.snippets.id,
       fileName,
@@ -917,7 +920,8 @@ export class DocumentService {
       updated_at: new Date().toISOString(),
       author_client: input.authorClient ?? this.principal.login,
     });
-    const markdown = buildMarkdownDocument(frontmatter, parsed.body);
+    const bodyWithLinks = await this.appendRelatedSection(project, parsed.body);
+    const markdown = buildMarkdownDocument(frontmatter, bodyWithLinks);
 
     let historyResult:
       | {
@@ -1502,4 +1506,47 @@ export class DocumentService {
       authorClient: input.authorClient ?? this.principal.login,
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Wiki link generation
+  // ---------------------------------------------------------------------------
+
+  async appendRelatedSection(project: string, body: string): Promise<string> {
+    try {
+      const entities = await this.entityRepo.listEntitiesForWikiLinks(project);
+      if (!entities.length) return body;
+      const related = generateRelatedSection(body, entities);
+      if (!related) return body;
+      return stripRelatedSection(body) + "\n\n" + related;
+    } catch {
+      return body;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Exported pure helpers for wiki link generation
+// ---------------------------------------------------------------------------
+
+export function generateRelatedSection(
+  bodyMarkdown: string,
+  entities: Array<{ name: string; slug: string; type: string }>,
+): string | null {
+  const text = bodyMarkdown.toLowerCase();
+  const matched: Array<{ name: string; slug: string }> = [];
+  for (const entity of entities) {
+    if (entity.name.length < 3) continue;
+    const nameLower = entity.name.toLowerCase();
+    const slugAsWords = entity.slug.replace(/-/g, " ").toLowerCase();
+    if (text.includes(nameLower) || (slugAsWords !== nameLower && text.includes(slugAsWords))) {
+      matched.push({ name: entity.name, slug: entity.slug });
+    }
+  }
+  if (!matched.length) return null;
+  const links = matched.map((e) => `[[${e.name}]]`).join("\n");
+  return `## Related\n\n${links}`;
+}
+
+export function stripRelatedSection(bodyMarkdown: string): string {
+  return bodyMarkdown.replace(/\n{1,2}## Related\n[\s\S]*$/, "").trimEnd();
 }
