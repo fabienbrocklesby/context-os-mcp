@@ -22,6 +22,7 @@ type ChunkVectorMetadata = {
   chunk_index: number;
   revision: number;
   url?: string;
+  memory_layer?: string;
 };
 
 export async function queryMemoryIndex(
@@ -116,6 +117,7 @@ export async function queryMemoryIndexWithDiagnostics(
         score: match.score,
         updatedAtUnix: metadata.updated_at_unix,
         url: metadata.url,
+        memoryLayer: metadata.memory_layer as MemorySearchHit["memoryLayer"] | undefined,
       });
     }
   }
@@ -156,6 +158,7 @@ export async function replaceDocumentVectors(
     usefulness?: number | null;
     revision: number;
     url?: string | null;
+    memoryLayer?: string | null;
     chunks: ChunkRecord[];
     embeddings: number[][];
   },
@@ -190,6 +193,7 @@ export async function replaceDocumentVectors(
       chunk_index: chunk.chunkIndex,
       revision: input.revision,
       ...(input.url ? { url: input.url } : {}),
+      ...(input.memoryLayer ? { memory_layer: input.memoryLayer } : {}),
     },
   }));
 

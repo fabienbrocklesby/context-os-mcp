@@ -53,6 +53,7 @@ type DocumentRow = {
   tags_json: string | null;
   confidence: number | null;
   usefulness: number | null;
+  memory_layer: string | null;
   superseded_by_document_id: string | null;
 };
 
@@ -3373,6 +3374,7 @@ function mapDocument(row?: DocumentRow | null): ResolvedMemoryDocument | null {
     tags: parseJsonArray(row.tags_json),
     confidence: row.confidence,
     usefulness: row.usefulness,
+    memoryLayer: row.memory_layer as ResolvedMemoryDocument["memoryLayer"] ?? undefined,
     supersededByDocumentId: row.superseded_by_document_id,
     lastRemoteModifiedAt: row.last_remote_modified_at,
   };
