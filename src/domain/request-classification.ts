@@ -92,6 +92,36 @@ export function classifyRequest(userIntent?: string): RequestClassification {
   };
 }
 
+export type RetrievalIntent = "planning" | "knowledge" | "status" | "historical" | "general";
+
+export function deriveRetrievalIntent(
+  classification: RequestClassification,
+  userIntent?: string,
+): RetrievalIntent {
+  const text = (userIntent ?? "").toLowerCase();
+
+  if (/\b(history|what happened|walk me through|recap)\b/.test(text)) {
+    return "historical";
+  }
+
+  if (/\b(what is the status|status of|where are we with|update on|latest on)\b/.test(text)) {
+    return "status";
+  }
+
+  if (
+    classification.categories.planning_scheduling ||
+    /\b(what should i|push on|focus on|work on|prioriti[sz]e|most important|best move|what.s next)\b/.test(text)
+  ) {
+    return "planning";
+  }
+
+  if (/\b(explain|tell me about|how does|describe|what is|what are)\b/.test(text)) {
+    return "knowledge";
+  }
+
+  return "general";
+}
+
 function primaryCategory(categories: RequestClassification["categories"]): RequestPrimaryCategory {
   if (categories.code_repo) {
     return "code_repo";

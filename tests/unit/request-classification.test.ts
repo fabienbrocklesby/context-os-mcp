@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyRequest } from "~/domain/request-classification";
+import { classifyRequest, deriveRetrievalIntent } from "~/domain/request-classification";
 
 describe("classifyRequest", () => {
   it("classifies planning and scheduling requests", () => {
@@ -32,5 +32,37 @@ describe("classifyRequest", () => {
 
     expect(result.categories.destructive_write_action).toBe(true);
     expect(result.risk_level).toBe("high");
+  });
+});
+
+describe("deriveRetrievalIntent", () => {
+  it("returns 'planning' for prioritization queries", () => {
+    const classification = classifyRequest("what should I focus on this week");
+    expect(deriveRetrievalIntent(classification, "what should I focus on this week")).toBe("planning");
+  });
+
+  it("returns 'planning' for push/work-on queries", () => {
+    const classification = classifyRequest("what should I push on now");
+    expect(deriveRetrievalIntent(classification, "what should I push on now")).toBe("planning");
+  });
+
+  it("returns 'knowledge' for explain queries", () => {
+    const classification = classifyRequest("explain the module architecture");
+    expect(deriveRetrievalIntent(classification, "explain the module architecture")).toBe("knowledge");
+  });
+
+  it("returns 'status' for current-state queries", () => {
+    const classification = classifyRequest("what is the status of the HamiltonJet deal");
+    expect(deriveRetrievalIntent(classification, "what is the status of the HamiltonJet deal")).toBe("status");
+  });
+
+  it("returns 'historical' for history queries", () => {
+    const classification = classifyRequest("what happened with FiveStar Print");
+    expect(deriveRetrievalIntent(classification, "what happened with FiveStar Print")).toBe("historical");
+  });
+
+  it("returns 'general' for ambiguous queries", () => {
+    const classification = classifyRequest("tell me something");
+    expect(deriveRetrievalIntent(classification, "tell me something")).toBe("general");
   });
 });
