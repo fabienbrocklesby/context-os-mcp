@@ -13,6 +13,7 @@ import {
 } from "~/domain/memory";
 import type { EntityRepository } from "~/persistence/d1/EntityRepository";
 import type { ProjectRepository } from "~/persistence/d1/ProjectRepository";
+import type { VaultSyncService } from "~/service/VaultSyncService";
 
 export class EntityService {
   constructor(
@@ -20,6 +21,7 @@ export class EntityService {
     private readonly principal: MemoryPrincipal,
     private readonly entityRepo: EntityRepository,
     private readonly projectRepo: ProjectRepository,
+    private readonly vaultSvc?: VaultSyncService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -64,12 +66,9 @@ export class EntityService {
   }) {
     const project = normalizeProject(input.project);
     await this.ensureProject({ project });
-    return {
-      task: await this.entityRepo.upsertTask({
-        ...input,
-        project,
-      }),
-    };
+    const saved = await this.entityRepo.upsertTask({ ...input, project });
+    if (this.vaultSvc && saved) this.vaultSvc.syncTask(project, saved).catch(() => {});
+    return { task: saved };
   }
 
   async saveSourceEvent(input: {
@@ -98,15 +97,9 @@ export class EntityService {
         policy,
       };
     }
-    return {
-      saved: true,
-      policy,
-      source_event: await this.entityRepo.saveSourceEvent({
-        ...input,
-        project,
-        savePolicy,
-      }),
-    };
+    const sourceEvent = await this.entityRepo.saveSourceEvent({ ...input, project, savePolicy });
+    if (this.vaultSvc && sourceEvent) this.vaultSvc.syncEvent(project, sourceEvent).catch(() => {});
+    return { saved: true, policy, source_event: sourceEvent };
   }
 
   async extractDurableFacts(input: {
@@ -143,6 +136,11 @@ export class EntityService {
           project,
         }),
       );
+    }
+    if (this.vaultSvc) {
+      for (const fact of saved) {
+        if (fact) this.vaultSvc.syncFact(project, fact).catch(() => {});
+      }
     }
     return { project, facts: extracted, saved };
   }
@@ -208,6 +206,17 @@ export class EntityService {
       observedAt: input.observedAt,
       status: input.status,
     });
+    if (this.vaultSvc && entity) {
+      const allStates = await this.entityRepo.listEntityStatesForEntities({
+        project,
+        entityIds: [entity.id],
+      });
+      const stateValues: Record<string, { value: unknown; updated_at: string | null }> = {};
+      for (const s of allStates) {
+        stateValues[s.stateKey] = { value: s.value, updated_at: s.updatedAt };
+      }
+      this.vaultSvc.syncEntity(project, entity, stateValues).catch(() => {});
+    }
     return { project, entity, aliases, state };
   }
 
