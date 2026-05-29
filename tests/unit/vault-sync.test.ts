@@ -20,7 +20,7 @@ import { VaultSyncService } from "~/service/VaultSyncService";
 
 describe("VaultSyncService.syncEntity", () => {
   it("calls uploadMarkdownFile with correct folder and filename", async () => {
-    const svc = new VaultSyncService({} as Env, mockZoho as any, mockConfig as any, mockProjectRepo as any);
+    const svc = new VaultSyncService(mockZoho as any, mockConfig as any, mockProjectRepo as any);
     await svc.syncEntity("light-lane", {
       id: "e1", project: "light-lane", type: "company", slug: "acme", name: "Acme Corp",
       summary: null, source: null, sourceId: null, confidence: null, metadata: {},
@@ -34,7 +34,7 @@ describe("VaultSyncService.syncEntity", () => {
 
   it("returns null silently when project has no workdriveRootFolderId", async () => {
     mockProjectRepo.getProject.mockResolvedValueOnce({ slug: "light-lane", workdriveRootFolderId: null });
-    const svc = new VaultSyncService({} as Env, mockZoho as any, mockConfig as any, mockProjectRepo as any);
+    const svc = new VaultSyncService(mockZoho as any, mockConfig as any, mockProjectRepo as any);
     const result = await svc.syncEntity("light-lane", {
       id: "e1", project: "light-lane", type: "company", slug: "acme", name: "Acme Corp",
       summary: null, source: null, sourceId: null, confidence: null, metadata: {},
@@ -48,7 +48,7 @@ describe("VaultSyncService.syncFact", () => {
   it("uploads to knowledge/facts folder", async () => {
     (mockZoho.ensureFolderPath as Mock).mockClear();
     (mockZoho.uploadMarkdownFile as Mock).mockClear();
-    const svc = new VaultSyncService({} as Env, mockZoho as any, mockConfig as any, mockProjectRepo as any);
+    const svc = new VaultSyncService(mockZoho as any, mockConfig as any, mockProjectRepo as any);
     await svc.syncFact("light-lane", {
       id: "f1", project: "light-lane", title: "Test Fact", body: "Fact body.",
       factKey: "test-fact-key", status: "active", source: null, sourceUrl: null,

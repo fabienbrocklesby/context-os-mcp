@@ -16,7 +16,6 @@ type StateValues = Record<string, { value: unknown; updated_at?: string | null }
 
 export class VaultSyncService {
   constructor(
-    private readonly env: Env,
     private readonly zoho: ZohoWorkDriveClient,
     private readonly config: ReturnType<typeof loadConfig>,
     private readonly projectRepo: ProjectRepository,
