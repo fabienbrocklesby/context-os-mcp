@@ -1556,6 +1556,33 @@ export class MemoryRepository {
     return result.results.map((row) => mapDocument(row)!);
   }
 
+  async findDocumentsByLayer(input: {
+    project: string;
+    memoryLayer: string;
+    canonical?: boolean;
+    limit?: number;
+  }): Promise<ResolvedMemoryDocument[]> {
+    const limit = input.limit ?? 10;
+    const canonicalClause = input.canonical !== undefined ? "AND d.canonical = ?" : "";
+    const canonicalBind = input.canonical !== undefined ? [input.canonical ? 1 : 0] : [];
+    const rows = await this.db
+      .prepare(
+        `SELECT d.*, s.raw_markdown, s.body_markdown, s.frontmatter_json
+         FROM documents d
+         LEFT JOIN document_snapshots s ON s.id = d.current_snapshot_id
+         WHERE d.project = ?
+           AND d.memory_layer = ?
+           AND d.status != 'archived'
+           AND d.active = 1
+           ${canonicalClause}
+         ORDER BY d.updated_at DESC
+         LIMIT ?`,
+      )
+      .bind(input.project, input.memoryLayer, ...canonicalBind, limit)
+      .all<DocumentRow & { raw_markdown?: string; body_markdown?: string; frontmatter_json?: string }>();
+    return rows.results.map((row) => mapDocument(row)!).filter(Boolean);
+  }
+
   async listProjectAliases() {
     const result = await this.db
       .prepare("SELECT alias, project_slug, created_at FROM project_aliases ORDER BY project_slug ASC, alias ASC")
@@ -3377,6 +3404,8 @@ function mapDocument(row?: DocumentRow | null): ResolvedMemoryDocument | null {
     memoryLayer: row.memory_layer as ResolvedMemoryDocument["memoryLayer"] ?? undefined,
     supersededByDocumentId: row.superseded_by_document_id,
     lastRemoteModifiedAt: row.last_remote_modified_at,
+    rawMarkdown: (row as DocumentRow & { raw_markdown?: string }).raw_markdown,
+    bodyMarkdown: (row as DocumentRow & { body_markdown?: string }).body_markdown,
   };
 }
 

@@ -1066,6 +1066,20 @@ export class MemoryService {
     };
   }
 
+  private async findSituationDocument(): Promise<ResolvedMemoryDocument | null> {
+    try {
+      const docs = await this.repo.findDocumentsByLayer({
+        project: "shared",
+        memoryLayer: "situation",
+        canonical: true,
+        limit: 1,
+      });
+      return docs[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async prepareAssistantSession(input: {
     projectOrTopic?: string;
     userIntent?: string;
@@ -1083,6 +1097,7 @@ export class MemoryService {
     taskProfile?: TaskProfile;
     responseMode?: AssistantSessionResponseMode;
   }) {
+    const situationDoc = await this.findSituationDocument();
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
       userIntent: input.userIntent,
@@ -1223,6 +1238,12 @@ export class MemoryService {
       repo_coverage: contextCompleteness.repo_coverage,
       memory_quality_gates: contextCompleteness.memory_quality_gates,
       context_resolution: resolution,
+      situation: situationDoc
+        ? {
+            content: situationDoc.bodyMarkdown ?? null,
+            path: situationDoc.path,
+          }
+        : null,
       active_project: activeProject,
       related_projects: relatedProjects,
       initiative_context: initiativeContext,
