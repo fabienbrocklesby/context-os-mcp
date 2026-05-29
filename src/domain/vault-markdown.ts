@@ -98,7 +98,7 @@ export function buildTaskVaultMarkdown(task: ContextTask): string {
     task_priority: task.priority,
     task_due: task.dueAt ?? null,
     task_owner: task.owner ?? null,
-    tags: ["task", task.priority ?? "normal", `project/${task.project}`],
+    tags: ["task", task.priority, `project/${task.project}`],
     created_at: task.createdAt,
     updated_at: task.updatedAt,
     author_client: "context-os",
@@ -107,7 +107,7 @@ export function buildTaskVaultMarkdown(task: ContextTask): string {
 
   const meta = [
     `**Status:** ${task.status}`,
-    `**Priority:** ${task.priority ?? "normal"}`,
+    `**Priority:** ${task.priority}`,
     task.dueAt ? `**Due:** ${task.dueAt.slice(0, 10)}` : null,
     task.owner ? `**Owner:** ${task.owner}` : null,
   ]
