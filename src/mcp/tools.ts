@@ -40,7 +40,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   // Services
   const projectSvc = new ProjectService(env, principal, projectRepo, docRepo, zoho, config);
   const initiativeSvc = new InitiativeService(env, principal, initiativeRepo, projectRepo, entityRepo);
-  const vaultSvc = new VaultSyncService(zoho, config, projectRepo);
+  const vaultSvc = new VaultSyncService(zoho, config, projectRepo, initiativeRepo);
   const entitySvc = new EntityService(env, principal, entityRepo, projectRepo, vaultSvc);
   const retrievalSvc = new RetrievalService(env, principal, projectRepo, docRepo, entityRepo, initiativeRepo);
   const docSvc = new DocumentService(env, principal, projectRepo, docRepo, entityRepo, config, zoho, github, vaultSvc);

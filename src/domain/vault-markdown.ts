@@ -182,18 +182,28 @@ export function buildInitiativeVaultMarkdown(
     source_urls: [],
   };
 
-  const entityLinks = entityNames
-    .map((name) => `- [[${name}]]`)
-    .join("\n");
+  const entityLinks = entityNames.map((name) => `- [[${name}]]`).join("\n");
+
+  const updatedDate = initiative.updatedAt?.slice(0, 10) ?? "—";
 
   const body = [
     `# ${initiative.title}`,
     "",
     initiative.summary ?? "",
     "",
-    "## Key Entities",
+    "## Pipeline",
     "",
     entityLinks || "_No entities yet._",
+    "",
+    "## Folders",
+    "",
+    `→ [[${initiative.title}/Pipeline]] — deals and companies`,
+    `→ [[${initiative.title}/Team]] — people`,
+    `→ [[${initiative.title}/Knowledge]] — facts and context`,
+    `→ [[${initiative.title}/Tasks]] — active tasks`,
+    `→ [[${initiative.title}/Events]] — logged events`,
+    "",
+    `_Last updated by Context OS: ${updatedDate}_`,
   ].join("\n");
 
   return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${body.trim()}\n`;
