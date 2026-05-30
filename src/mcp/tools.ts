@@ -56,7 +56,7 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   registerRetrievalTools(server, retrievalSvc, docSvc);
   registerMemoryTools(server, entitySvc, docSvc);
   registerInitiativeTools(server, initiativeSvc);
-  registerAdminTools(server, docSvc);
+  registerAdminTools(server, docSvc, vaultSvc);
 
   return server;
 }

@@ -1322,6 +1322,52 @@ export class DocumentService {
     return { updated, skipped, dry_run: dryRun, samples };
   }
 
+  async adminSyncVaultFromD1(input: {
+    project: string;
+    dryRun: boolean;
+    vaultSvc: VaultSyncService;
+  }) {
+    const project = normalizeProject(input.project);
+    const counts = { entities: 0, facts: 0, tasks: 0, events: 0, errors: 0 };
+
+    const entities = await this.entityRepo.searchEntities({ project, limit: 50 });
+    for (const entity of entities) {
+      try {
+        const states = await this.entityRepo.listEntityStatesForEntities({ project, entityIds: [entity.id] });
+        const stateValues: Record<string, { value: unknown; updated_at: string | null }> = {};
+        for (const s of states) stateValues[s.stateKey] = { value: s.value, updated_at: s.updatedAt };
+        if (!input.dryRun) await input.vaultSvc.syncEntity(project, entity, stateValues);
+        counts.entities++;
+      } catch { counts.errors++; }
+    }
+
+    const facts = await this.entityRepo.listFacts({ project, limit: 100 });
+    for (const fact of facts) {
+      try {
+        if (!input.dryRun) await input.vaultSvc.syncFact(project, fact);
+        counts.facts++;
+      } catch { counts.errors++; }
+    }
+
+    const tasks = await this.entityRepo.listTasks({ project, includeDone: true, limit: 100 });
+    for (const task of tasks) {
+      try {
+        if (!input.dryRun) await input.vaultSvc.syncTask(project, task);
+        counts.tasks++;
+      } catch { counts.errors++; }
+    }
+
+    const events = await this.entityRepo.listSourceEvents({ project, limit: 100 });
+    for (const event of events) {
+      try {
+        if (!input.dryRun) await input.vaultSvc.syncEvent(project, event);
+        counts.events++;
+      } catch { counts.errors++; }
+    }
+
+    return { project, dry_run: input.dryRun, counts };
+  }
+
   async finishWorkSession(input: {
     project: string;
     title: string;

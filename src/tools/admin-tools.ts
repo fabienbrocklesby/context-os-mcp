@@ -2,11 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { DocumentService } from "~/service/DocumentService";
+import type { VaultSyncService } from "~/service/VaultSyncService";
 import { textResult } from "~/tools/schemas";
 
 export function registerAdminTools(
   server: McpServer,
   docSvc: DocumentService,
+  vaultSvc: VaultSyncService,
 ) {
   server.registerTool(
     "reindex_document",
@@ -89,6 +91,26 @@ export function registerAdminTools(
     async (input) => {
       const result = await docSvc.backfillMemoryLayers({ dryRun: input.dry_run !== false });
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    "admin_sync_vault_from_d1",
+    {
+      description: "Backfill Obsidian vault files from all D1 entities, facts, tasks, and source events for a given project. Run once after deploying vault sync to materialise existing data.",
+      inputSchema: z.object({
+        project: z.string().describe("Project slug, e.g. 'light-lane'"),
+        dry_run: z.boolean().optional().describe("Default false. Set true to preview counts without writing files."),
+      }),
+      annotations: { destructiveHint: false, idempotentHint: true },
+    },
+    async ({ project, dry_run }) => {
+      const result = await docSvc.adminSyncVaultFromD1({
+        project,
+        dryRun: dry_run === true,
+        vaultSvc,
+      });
+      return textResult(JSON.stringify(result, null, 2));
     },
   );
 }
