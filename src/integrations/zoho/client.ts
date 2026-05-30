@@ -247,6 +247,28 @@ export class ZohoWorkDriveClient {
       );
     }
 
+    // Parse the upload response to get the file ID directly, avoiding a
+    // separate listFiles call (which paginates at 20 items and fails for
+    // large folders). The upload API returns resource_id in attributes.
+    try {
+      const body = await response.json() as { data?: Array<{ attributes?: { resource_id?: string } }> };
+      const resourceId = body?.data?.[0]?.attributes?.resource_id;
+      if (resourceId) {
+        return {
+          id: resourceId,
+          name: input.fileName,
+          isFolder: false,
+          parentId: input.folderId,
+          downloadUrl: null,
+          permalink: null,
+          modifiedTimeMillis: null,
+          createdTimeMillis: null,
+        } satisfies ZohoFile;
+      }
+    } catch {
+      // fall through to findFileByName
+    }
+
     const uploaded = await this.findFileByName(input.folderId, input.fileName);
     if (!uploaded) {
       throw new Error(
