@@ -26,6 +26,7 @@ import { ZohoWorkDriveClient, type ZohoFile } from "~/integrations/zoho/client";
 import type { DocumentRepository } from "~/persistence/d1/DocumentRepository";
 import type { EntityRepository } from "~/persistence/d1/EntityRepository";
 import type { ProjectRepository } from "~/persistence/d1/ProjectRepository";
+import type { VaultSyncService } from "~/service/VaultSyncService";
 
 // ---------------------------------------------------------------------------
 // Module-level helpers (copied from service.ts)
@@ -411,6 +412,7 @@ export class DocumentService {
   private readonly config: ReturnType<typeof loadConfig>;
   private readonly zoho: ZohoWorkDriveClient;
   private readonly github: GithubOAuthClient | null;
+  private readonly vaultSvc?: VaultSyncService;
 
   constructor(
     private readonly env: Env,
@@ -421,10 +423,12 @@ export class DocumentService {
     config?: ReturnType<typeof loadConfig>,
     zoho?: ZohoWorkDriveClient,
     github: GithubOAuthClient | null = null,
+    vaultSvc?: VaultSyncService,
   ) {
     this.config = config ?? loadConfig(env);
     this.zoho = zoho ?? new ZohoWorkDriveClient(env);
     this.github = github;
+    this.vaultSvc = vaultSvc;
   }
 
   // ---------------------------------------------------------------------------
@@ -1409,12 +1413,9 @@ export class DocumentService {
     const tasks = [];
     for (const task of input.tasks ?? []) {
       await this.ensureProjectMinimal({ project });
-      tasks.push({
-        task: await this.entityRepo.upsertTask({
-          ...task,
-          project,
-        }),
-      });
+      const saved = await this.entityRepo.upsertTask({ ...task, project });
+      tasks.push({ task: saved });
+      if (this.vaultSvc && saved) this.vaultSvc.syncTask(project, saved).catch(() => {});
     }
     const sourceEvents = [];
     for (const event of input.sourceEvents ?? []) {
@@ -1428,25 +1429,16 @@ export class DocumentService {
           policy,
         });
       } else {
-        sourceEvents.push({
-          saved: true,
-          policy,
-          source_event: await this.entityRepo.saveSourceEvent({
-            ...event,
-            project,
-            savePolicy,
-          }),
-        });
+        const sourceEvent = await this.entityRepo.saveSourceEvent({ ...event, project, savePolicy });
+        if (this.vaultSvc && sourceEvent) this.vaultSvc.syncEvent(project, sourceEvent).catch(() => {});
+        sourceEvents.push({ saved: true, policy, source_event: sourceEvent });
       }
     }
     const facts = [];
     for (const fact of input.facts ?? []) {
-      facts.push(
-        await this.entityRepo.upsertFact({
-          ...fact,
-          project,
-        }),
-      );
+      const saved = await this.entityRepo.upsertFact({ ...fact, project });
+      if (this.vaultSvc && saved) this.vaultSvc.syncFact(project, saved).catch(() => {});
+      facts.push(saved);
     }
     return { summary, decisions, snippets, tasks, source_events: sourceEvents, facts };
   }
