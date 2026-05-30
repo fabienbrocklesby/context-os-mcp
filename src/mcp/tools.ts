@@ -14,6 +14,7 @@ import { InitiativeService } from "~/service/InitiativeService";
 import { PlanningService } from "~/service/PlanningService";
 import { ProjectService } from "~/service/ProjectService";
 import { RetrievalService } from "~/service/RetrievalService";
+import { VaultSyncService } from "~/service/VaultSyncService";
 import { registerAdminTools } from "~/tools/admin-tools";
 import { registerGithubTools } from "~/tools/github-tools";
 import { registerInitiativeTools } from "~/tools/initiative-tools";
@@ -39,9 +40,10 @@ export function createMemoryMcpServer(env: Env, principal: MemoryPrincipal) {
   // Services
   const projectSvc = new ProjectService(env, principal, projectRepo, docRepo, zoho, config);
   const initiativeSvc = new InitiativeService(env, principal, initiativeRepo, projectRepo, entityRepo);
-  const entitySvc = new EntityService(env, principal, entityRepo, projectRepo);
+  const vaultSvc = new VaultSyncService(zoho, config, projectRepo);
+  const entitySvc = new EntityService(env, principal, entityRepo, projectRepo, vaultSvc);
   const retrievalSvc = new RetrievalService(env, principal, projectRepo, docRepo, entityRepo, initiativeRepo);
-  const docSvc = new DocumentService(env, principal, projectRepo, docRepo, entityRepo, config, zoho, github);
+  const docSvc = new DocumentService(env, principal, projectRepo, docRepo, entityRepo, config, zoho, github, vaultSvc);
   const planningSvc = new PlanningService(
     env, principal, projectRepo, docRepo, entityRepo, initiativeRepo,
     retrievalSvc, initiativeSvc, docSvc, config,
