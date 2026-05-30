@@ -205,7 +205,13 @@ function titleFromSlug(slug: string) {
 function inferMemoryLayer(
   memoryType: string,
   canonical: boolean,
+  path?: string,
 ): "situation" | "knowledge" | "operational" | "event_log" {
+  if (path) {
+    if (path.includes("/knowledge/")) return "knowledge";
+    if (path.includes("/operational/")) return "operational";
+    if (path.includes("/initiatives/")) return "situation";
+  }
   if (memoryType === "session_summary" || memoryType === "historical_note") {
     return "event_log";
   }
@@ -1296,7 +1302,7 @@ export class DocumentService {
         continue;
       }
 
-      const layer = inferMemoryLayer(row.memory_type, row.canonical);
+      const layer = inferMemoryLayer(row.memory_type, row.canonical, row.path);
 
       if (samples.length < 20) {
         samples.push({

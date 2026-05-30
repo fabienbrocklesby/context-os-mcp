@@ -712,10 +712,16 @@ export function inferMemoryTypeFromPath(path: string): MemoryType {
   if (path.includes("/snippets/")) {
     return "snippet";
   }
-  if (path.includes("/decisions/")) {
+  if (path.includes("/knowledge/facts/")) {
     return "decision";
   }
-  if (path.includes("/sessions/")) {
+  if (path.includes("/knowledge/decisions/") || path.includes("/decisions/")) {
+    return "decision";
+  }
+  if (path.includes("/operational/events/")) {
+    return "historical_note";
+  }
+  if (path.includes("/operational/sessions/") || path.includes("/sessions/")) {
     return "session_summary";
   }
   if (path.includes("/history/")) {
