@@ -35,6 +35,7 @@ export function selectCurrentContextManifest(
     .slice(0, max)
     .map((entry) => entry.doc);
 }
+
 const MAX_MEMORY_EXCERPTS = 12;
 const MAX_TASKS = 12;
 const MAX_FACTS = 12;
