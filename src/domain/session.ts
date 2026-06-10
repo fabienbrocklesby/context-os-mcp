@@ -10,7 +10,31 @@ export const COMPACT_SESSION_MAX_BYTES = 64 * 1024;
 
 export type AssistantSessionResponseMode = "compact" | "expanded";
 
-const MAX_MANIFEST_DOCUMENTS = 72;
+export const MAX_MANIFEST_DOCUMENTS = 16;
+
+/**
+ * Curate the current-context manifest: situation first, then real context/current
+ * documents, then non-entity knowledge, with entity-stub docs pushed last. Entity
+ * stubs flood the manifest and are reachable via search, so they should not dominate
+ * the always-loaded pack.
+ */
+export function selectCurrentContextManifest(
+  documents: ResolvedMemoryDocument[],
+  max: number = MAX_MANIFEST_DOCUMENTS,
+): ResolvedMemoryDocument[] {
+  const rank = (doc: ResolvedMemoryDocument): number => {
+    if (doc.memoryLayer === "situation") return 0;
+    if (doc.path.includes("/context/current/")) return 1;
+    if (doc.path.includes("/knowledge/entities/")) return 4;
+    if (doc.memoryLayer === "knowledge") return 2;
+    return 3;
+  };
+  return [...documents]
+    .map((doc, index) => ({ doc, index, rank: rank(doc) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, max)
+    .map((entry) => entry.doc);
+}
 const MAX_MEMORY_EXCERPTS = 12;
 const MAX_TASKS = 12;
 const MAX_FACTS = 12;
@@ -51,7 +75,7 @@ export function compactCurrentContextDocuments(documents: ResolvedMemoryDocument
   return {
     mode: "manifest",
     document_count: documents.length,
-    items: documents.slice(0, MAX_MANIFEST_DOCUMENTS).map((document) => ({
+    items: selectCurrentContextManifest(documents).map((document) => ({
       id: document.id,
       title: document.title,
       path: document.path,

@@ -318,7 +318,7 @@ describe("MemoryService assistant session reliability planning", () => {
 
     expect(result.response_mode).toBe("compact");
     expect(result.current_context.items.length).toBeGreaterThan(0);
-    expect(result.current_context.items.length).toBeLessThanOrEqual(68);
+    expect(result.current_context.items.length).toBeLessThanOrEqual(16);
     expect(result.current_context.items[0]).not.toHaveProperty("snapshot");
     expect(JSON.stringify(result.current_context)).not.toContain("full context body");
     expect(mocks.getLatestSnapshot).not.toHaveBeenCalled();
