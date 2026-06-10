@@ -115,3 +115,53 @@ describe("rerankSearchHits with layer filtering", () => {
     expect(result[0].documentId).toBe("knowledge-doc");
   });
 });
+
+describe("multiplicative recency decay", () => {
+  const NOW = Date.UTC(2026, 5, 10); // 2026-06-10
+
+  function hitAt(documentId: string, daysAgo: number, over: Partial<MemorySearchHit> = {}): MemorySearchHit {
+    return makeHit({
+      documentId,
+      score: 0.7,
+      updatedAtUnix: Math.floor((NOW - daysAgo * 24 * 60 * 60 * 1000) / 1000),
+      ...over,
+    });
+  }
+
+  it("ranks a fresh session summary above a 60-day-old one", () => {
+    const ranked = rerankSearchHits(
+      [
+        hitAt("stale-session", 60, { memoryType: "session_summary", status: "historical", active: false, memoryLayer: "event_log" }),
+        hitAt("fresh-session", 1, { memoryType: "session_summary", status: "historical", active: false, memoryLayer: "event_log" }),
+      ],
+      { now: NOW, includeSuperseded: true },
+    );
+    expect(ranked[0]?.documentId).toBe("fresh-session");
+  });
+
+  it("decays a durable snippet far less than a session summary over the same age", () => {
+    // Both 90 days old, same base score. The snippet (durable) should outrank the session summary (volatile).
+    const ranked = rerankSearchHits(
+      [
+        hitAt("old-session", 90, { memoryType: "session_summary", status: "historical", active: false, memoryLayer: "event_log" }),
+        hitAt("old-snippet", 90, { memoryType: "snippet", memoryLayer: "knowledge" }),
+      ],
+      { now: NOW, includeSuperseded: true },
+    );
+    expect(ranked[0]?.documentId).toBe("old-snippet");
+  });
+
+  it("orders two equally-relevant stale session summaries by recency", () => {
+    // Both > 30 days old (old additive model gives both +0 freshness -> tie, stable
+    // sort keeps input order [older, newer]). Multiplicative decay must reorder so the
+    // less-stale one wins. Reversed input order makes the assertion meaningful.
+    const ranked = rerankSearchHits(
+      [
+        hitAt("older", 90, { memoryType: "session_summary", status: "historical", active: false, memoryLayer: "event_log" }),
+        hitAt("newer", 40, { memoryType: "session_summary", status: "historical", active: false, memoryLayer: "event_log" }),
+      ],
+      { now: NOW, includeSuperseded: true },
+    );
+    expect(ranked[0]?.documentId).toBe("newer");
+  });
+});
