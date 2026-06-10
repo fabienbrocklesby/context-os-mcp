@@ -148,6 +148,18 @@ function keywordFallbackScore(
   return score;
 }
 
+// Maps keywordFallbackScore (roughly -11..+11) into a bounded 0.05..0.6
+// relevance so keyword fallback results keep their relative order in
+// emitted scores but never outrank strong semantic hits (which score
+// higher once vector retrieval is healthy).
+function keywordFallbackRelevance(
+  document: { project: string; memoryType: string; active: boolean; canonical: boolean; status: string },
+  project: string,
+) {
+  const raw = keywordFallbackScore(document, project);
+  return Math.min(0.6, Math.max(0.05, 0.35 + raw * 0.02));
+}
+
 function groupSearchResults(results: SearchResultItem[]) {
   return results.reduce<Record<string, SearchResultItem[]>>((grouped, result) => {
     const key = result.memory_type;
@@ -514,10 +526,20 @@ export class RetrievalService {
       userIntent: input.query,
     });
     const contextCompleteness = await this.assessContextCompletenessSafely(normalizedProject);
+    const anyVectorError = projectResults.some((result) => result.diagnostics?.vector_error);
+    const anyRankedHits = projectResults.some(
+      (result) => (result.diagnostics?.ranked_vector_hits ?? 0) > 0,
+    );
 
     return {
       task_profile: taskProfile,
       required_context_pack: requiredContextPack,
+      degraded: anyVectorError,
+      retrieval_mode: anyVectorError
+        ? "keyword_fallback_degraded"
+        : anyRankedHits
+          ? "semantic"
+          : "keyword_fallback",
       context_completeness: contextCompleteness,
       repo_coverage: contextCompleteness.repo_coverage,
       memory_quality_gates: contextCompleteness.memory_quality_gates,
@@ -798,7 +820,7 @@ export class RetrievalService {
           path: document.path,
           url: document.permalink ?? document.path,
           text: `Keyword match: ${document.title}`,
-          score: 0.35,
+          score: keywordFallbackRelevance(document, normalizedProject),
           memory_type: document.memoryType,
           status: document.status,
           project: document.project,
@@ -817,6 +839,12 @@ export class RetrievalService {
     return {
       task_profile: taskProfile,
       required_context_pack: requiredContextPack,
+      degraded: Boolean(vectorError),
+      retrieval_mode: vectorError
+        ? "keyword_fallback_degraded"
+        : ranked.length > 0
+          ? "semantic"
+          : "keyword_fallback",
       context_completeness: contextCompleteness,
       repo_coverage: contextCompleteness.repo_coverage,
       memory_quality_gates: contextCompleteness.memory_quality_gates,

@@ -385,4 +385,47 @@ describe("MemoryService searchMemory", () => {
     });
     expect(includeResult.results[0]?.id).toBe("archived-doc");
   });
+
+  it("flags degraded retrieval and keeps ranked keyword scores when the vector path throws", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    mocks.queryMemoryIndex.mockRejectedValue(
+      new Error("D1_ERROR: variable number must be between ?1 and ?100"),
+    );
+    mocks.searchDocumentsKeyword.mockResolvedValue([
+      makeDocument({
+        id: "shared-decision",
+        title: "Shared historical decision",
+        project: "shared",
+        namespace: "shared",
+        memoryType: "decision",
+      }),
+      makeDocument({
+        id: "project-context",
+        title: "Project current context",
+        project: "memory-system-mcp",
+        namespace: "memory-system-mcp",
+        memoryType: "current_context",
+      }),
+    ]);
+
+    const result = await service.searchMemory({
+      project: "memory-system-mcp",
+      query: "current pipeline state",
+      limit: 5,
+    });
+
+    expect(result.degraded).toBe(true);
+    expect(result.retrieval_mode).toBe("keyword_fallback_degraded");
+    expect(result.diagnostics.vector_error).toContain("variable number");
+
+    const projectScore = result.results.find((item) => item.id === "project-context")?.score;
+    const sharedScore = result.results.find((item) => item.id === "shared-decision")?.score;
+    expect(projectScore).toBeDefined();
+    expect(sharedScore).toBeDefined();
+    expect(projectScore).not.toBe(sharedScore);
+    expect(projectScore!).toBeGreaterThan(sharedScore!);
+    expect(result.results[0]?.id).toBe("project-context");
+  });
 });

@@ -1024,8 +1024,15 @@ export class PlanningService {
       initiatives,
       activeSources: input.activeSources,
     })
-      .concat(project === "light-lane" ? contextCompleteness.warnings : [])
-      .concat(currentTruth?.warnings ?? []);
+      .concat(contextCompleteness.warnings)
+      .concat(currentTruth?.warnings ?? [])
+      .concat(
+        retrievalMode === "vector_error"
+          ? [
+              "DEGRADED: semantic retrieval failed and results are keyword-only; treat memory recall as incomplete and stale-biased.",
+            ]
+          : [],
+      );
     const contextHealth = {
       retrieval_mode: retrievalMode,
       warnings,
