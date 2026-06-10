@@ -397,6 +397,7 @@ export function registerMemoryTools(
         project: z.string().optional(),
         text: z.string().min(1),
         title: z.string().optional(),
+        fact_key: z.string().optional().describe("Stable topic key. Reusing a key for the same project upserts that fact in place (UNIQUE(project, fact_key)), so a new value replaces the prior one instead of accumulating duplicates."),
         source: z.string().optional(),
         source_url: z.string().optional(),
         confidence: z.number().min(0).max(1).optional(),
@@ -406,9 +407,9 @@ export function registerMemoryTools(
       }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    async ({ project, text, title, source, source_url, confidence, initiative_id, entity_id, save }) =>
+    async ({ project, text, title, fact_key, source, source_url, confidence, initiative_id, entity_id, save }) =>
       textResult(await entitySvc.extractDurableFacts({
-        project, text, title, source, sourceUrl: source_url, confidence,
+        project, text, title, factKey: fact_key, source, sourceUrl: source_url, confidence,
         initiativeId: initiative_id, entityId: entity_id, save,
       })),
   );

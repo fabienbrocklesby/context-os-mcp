@@ -1617,6 +1617,7 @@ export class MemoryService {
     project?: string;
     text: string;
     title?: string;
+    factKey?: string;
     source?: string;
     sourceUrl?: string;
     confidence?: number;
@@ -1628,7 +1629,9 @@ export class MemoryService {
     const extracted = extractFactCandidates(input.text).map((body, index) => ({
       title: input.title ?? `Extracted fact ${index + 1}`,
       body,
-      factKey: slugify(`${input.source ?? "manual"}-${body}`).slice(0, 140),
+      factKey: input.factKey
+        ? (index === 0 ? input.factKey : `${input.factKey}-${index}`)
+        : slugify(`${input.source ?? "manual"}-${body}`).slice(0, 140),
       source: input.source,
       sourceUrl: input.sourceUrl,
       confidence: input.confidence ?? 0.65,
