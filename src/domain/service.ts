@@ -2641,6 +2641,7 @@ export class MemoryService {
     markdown: string;
     tags?: string[];
     supersedesDocumentIds?: string[];
+    canonicalKey?: string;
     authorClient?: string;
   }) {
     const project = normalizeProject(input.project);
@@ -2656,7 +2657,12 @@ export class MemoryService {
       memory_type: "decision",
       status: "active",
       canonical: false,
-      tags: input.tags ?? parsed.frontmatter.tags,
+      tags: input.canonicalKey
+        ? [
+            ...(input.tags ?? parsed.frontmatter.tags ?? []),
+            `canonical-key:${input.canonicalKey}`,
+          ]
+        : (input.tags ?? parsed.frontmatter.tags),
       supersedes: input.supersedesDocumentIds ?? parsed.frontmatter.supersedes,
       author_client: input.authorClient ?? this.principal.login,
     });
@@ -2678,6 +2684,16 @@ export class MemoryService {
       await this.repo.markDocumentsSuperseded({
         documentIds: input.supersedesDocumentIds,
       });
+    }
+    if (input.canonicalKey) {
+      const priorDocs = await this.repo.findActiveDocumentsByCanonicalKey({
+        project,
+        canonicalKey: input.canonicalKey,
+      });
+      const priorIds = priorDocs.map((doc) => doc.id);
+      if (priorIds.length) {
+        await this.repo.markDocumentsSuperseded({ documentIds: priorIds });
+      }
     }
     return { path, workdrive_file_id: uploaded.id, job_id: jobId };
   }

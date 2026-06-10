@@ -630,6 +630,27 @@ export class DocumentRepository {
     return rows.results.map((row) => mapDocument(row)!).filter(Boolean);
   }
 
+  async findActiveDocumentsByCanonicalKey(input: {
+    project: string;
+    canonicalKey: string;
+    excludeDocumentId?: string;
+  }): Promise<ResolvedMemoryDocument[]> {
+    const tag = `canonical-key:${input.canonicalKey}`.toLowerCase();
+    const rows = await this.db
+      .prepare(
+        `SELECT * FROM documents
+         WHERE project = ?1
+           AND active = 1
+           AND status NOT IN ('archived', 'superseded')
+           AND instr(lower(COALESCE(tags_json, '')), ?2) > 0`,
+      )
+      .bind(input.project, tag)
+      .all<DocumentRow>();
+    return rows.results
+      .map((row) => mapDocument(row)!)
+      .filter((doc) => Boolean(doc) && doc.id !== input.excludeDocumentId);
+  }
+
   async listProjectAliases() {
     const result = await this.db
       .prepare("SELECT alias, project_slug, created_at FROM project_aliases ORDER BY project_slug ASC, alias ASC")

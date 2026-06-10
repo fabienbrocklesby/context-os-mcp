@@ -207,14 +207,16 @@ export function registerMemoryTools(
         markdown: z.string().min(1),
         tags: z.array(z.string()).optional(),
         supersedes_document_ids: z.array(z.string()).optional(),
+        canonical_key: z.string().optional().describe("Stable topic key (slug). Writing a decision with this key supersedes any prior active document carrying the same key, so current truth replaces stale truth automatically."),
         author_client: z.string().optional(),
       }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    async ({ project, title, markdown, tags, supersedes_document_ids, author_client }) =>
+    async ({ project, title, markdown, tags, supersedes_document_ids, canonical_key, author_client }) =>
       textResult(await docSvc.recordDecision({
         project, title, markdown, tags,
-        supersedesDocumentIds: supersedes_document_ids, authorClient: author_client,
+        supersedesDocumentIds: supersedes_document_ids, canonicalKey: canonical_key,
+        authorClient: author_client,
       })),
   );
 
