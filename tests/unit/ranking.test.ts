@@ -116,6 +116,64 @@ describe("rerankSearchHits with layer filtering", () => {
   });
 });
 
+describe("stale-volatile hard gate", () => {
+  const NOW = Date.UTC(2026, 5, 10);
+  function sessionAt(documentId: string, daysAgo: number): MemorySearchHit {
+    return makeHit({
+      documentId,
+      score: 0.95,
+      memoryType: "session_summary",
+      status: "historical",
+      active: false,
+      memoryLayer: "event_log",
+      updatedAtUnix: Math.floor((NOW - daysAgo * 24 * 60 * 60 * 1000) / 1000),
+    });
+  }
+
+  it("drops session summaries older than the cutoff by default", () => {
+    const ranked = rerankSearchHits([sessionAt("ancient", 90), makeHit({ documentId: "keep" })], { now: NOW });
+    expect(ranked.map((h) => h.documentId)).not.toContain("ancient");
+    expect(ranked.map((h) => h.documentId)).toContain("keep");
+  });
+
+  it("keeps stale session summaries when history is explicitly requested", () => {
+    const ranked = rerankSearchHits([sessionAt("ancient", 90), makeHit({ documentId: "keep" })], {
+      now: NOW,
+      includeSuperseded: true,
+    });
+    expect(ranked.map((h) => h.documentId)).toContain("ancient");
+  });
+
+  it("does not drop a current_context doc no matter how old", () => {
+    const old = makeHit({
+      documentId: "old-context",
+      memoryType: "current_context",
+      updatedAtUnix: Math.floor((NOW - 200 * 24 * 60 * 60 * 1000) / 1000),
+    });
+    const ranked = rerankSearchHits([old], { now: NOW });
+    expect(ranked.map((h) => h.documentId)).toContain("old-context");
+  });
+
+  it("keeps a session summary exactly at the cutoff but drops one just past it", () => {
+    const ranked = rerankSearchHits([sessionAt("at-cutoff", 45), sessionAt("just-over", 46)], { now: NOW });
+    const ids = ranked.map((h) => h.documentId);
+    expect(ids).toContain("at-cutoff");
+    expect(ids).not.toContain("just-over");
+  });
+
+  it("gates stale historical_note as well as session_summary", () => {
+    const note = makeHit({
+      documentId: "old-note",
+      memoryType: "historical_note",
+      status: "historical",
+      active: false,
+      updatedAtUnix: Math.floor((NOW - 90 * 24 * 60 * 60 * 1000) / 1000),
+    });
+    const ranked = rerankSearchHits([note, makeHit({ documentId: "keep" })], { now: NOW });
+    expect(ranked.map((h) => h.documentId)).not.toContain("old-note");
+  });
+});
+
 describe("multiplicative recency decay", () => {
   const NOW = Date.UTC(2026, 5, 10); // 2026-06-10
 

@@ -32,6 +32,21 @@ function recencyMultiplier(memoryType: MemoryType, ageDays: number): number {
   return Math.max(floor, raw);
 }
 
+// 45 days is ~2.1 half-lives for volatile types (21-day half-life), i.e. deep decay:
+// past this, even a strong semantic match is a stale false positive, so gate it out.
+// includeSuperseded acts as the explicit "show me history" override.
+const VOLATILE_STALE_CUTOFF_DAYS: Partial<Record<MemoryType, number>> = {
+  session_summary: 45,
+  historical_note: 45,
+};
+
+function isStaleVolatile(hit: MemorySearchHit, now: number): boolean {
+  const cutoff = VOLATILE_STALE_CUTOFF_DAYS[hit.memoryType];
+  if (cutoff === undefined) return false;
+  const ageDays = Math.max(0, (now - hit.updatedAtUnix * 1000) / DAY_MS);
+  return ageDays > cutoff;
+}
+
 export function rerankSearchHits(
   hits: MemorySearchHit[],
   options: {
@@ -47,6 +62,7 @@ export function rerankSearchHits(
   return [...hits]
     .filter((hit) => options.includeSuperseded || !hit.superseded)
     .filter((hit) => options.includeSuperseded || isRetrievableMemoryStatus(hit.status))
+    .filter((hit) => options.includeSuperseded || !isStaleVolatile(hit, now))
     .filter((hit) => {
       if (!options.excludeLayers?.length || !hit.memoryLayer) return true;
       return !options.excludeLayers.includes(hit.memoryLayer);
