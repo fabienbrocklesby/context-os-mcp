@@ -60,7 +60,7 @@ import {
 } from "~/domain/memory";
 import { computeNotCurrentEntities, markContradictedHits } from "~/domain/entity-authority";
 import { rerankSearchHits } from "~/domain/ranking";
-import { classifyRequest, deriveRetrievalIntent, type RetrievalIntent } from "~/domain/request-classification";
+import { classifyRequest, deriveRetrievalIntent, requiresExternalStateChecks, type RetrievalIntent } from "~/domain/request-classification";
 import {
   applyDocumentDiversity,
   buildRequiredContextPack,
@@ -79,6 +79,7 @@ import {
   compactLiveCheckRecommendations,
   compactOperatingBrief,
   compactProject,
+  compactRepoCoverage,
   compactSearchMemory,
   compactSourceEvents,
   compactStrategyContext,
@@ -1303,6 +1304,7 @@ export class MemoryService {
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
+        externalStateRelevant: requiresExternalStateChecks(assistantActionPlan.request_classification),
       }),
       write_back_policy: writeBackPolicy,
       retrieval_guidance: retrievalGuidance(),
@@ -1314,6 +1316,7 @@ export class MemoryService {
       return session;
     }
 
+    const compactedRepoCoverage = compactRepoCoverage(contextCompleteness.repo_coverage);
     return enforceCompactSessionBudget({
       ...session,
       context_resolution: compactContextResolution(resolution),
@@ -1332,6 +1335,11 @@ export class MemoryService {
       operating_brief: compactOperatingBrief(operatingBrief),
       write_back_policy: compactWriteBackPolicy(writeBackPolicy),
       recommended_live_mcp_checks: compactLiveCheckRecommendations(session.recommended_live_mcp_checks),
+      repo_coverage: compactedRepoCoverage,
+      context_completeness: {
+        ...contextCompleteness,
+        repo_coverage: compactedRepoCoverage,
+      },
     });
   }
 
@@ -2453,6 +2461,7 @@ export class MemoryService {
     }
 
     const compactStrategy = compactStrategyContext(strategy.strategy_context);
+    const compactedRepoCoverage = compactRepoCoverage(contextCompleteness.repo_coverage);
     return enforceCompactSessionBudget({
       ...response,
       context_resolution: compactContextResolution(resolution),
@@ -2463,6 +2472,11 @@ export class MemoryService {
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
       tool_plan: compactToolPlan(actionPlan.tool_plan),
       operating_brief: compactOperatingBrief(operatingBrief, "active_tasks"),
+      repo_coverage: compactedRepoCoverage,
+      context_completeness: {
+        ...contextCompleteness,
+        repo_coverage: compactedRepoCoverage,
+      },
     });
   }
 
@@ -6481,16 +6495,19 @@ function recommendedLiveChecks(input: {
   sourceEvents: SourceEvent[];
   warnings: string[];
   currentTruthChecks?: unknown[];
+  externalStateRelevant: boolean;
 }) {
   const checks = new Set<string>();
-  for (const source of input.activeSources ?? []) {
-    checks.add(`Check live ${source} for fresh context before writing durable summaries.`);
-  }
-  if (input.tasks.some((task) => task.dueAt || task.reminderAt)) {
-    checks.add("Check calendar/reminder source for due-date freshness.");
-  }
-  if (input.sourceEvents.length === 0) {
-    checks.add("If this task depends on CRM/email/calendar/shopify state, query that live MCP before deciding.");
+  if (input.externalStateRelevant) {
+    for (const source of input.activeSources ?? []) {
+      checks.add(`Check live ${source} for fresh context before writing durable summaries.`);
+    }
+    if (input.tasks.some((task) => task.dueAt || task.reminderAt)) {
+      checks.add("Check calendar/reminder source for due-date freshness.");
+    }
+    if (input.sourceEvents.length === 0) {
+      checks.add("If this task depends on CRM/email/calendar/shopify state, query that live MCP before deciding.");
+    }
   }
   if (input.warnings.some((warning) => warning.includes("semantic"))) {
     checks.add("Run retrieval_diagnostics and consider reindexing before assuming memory is complete.");

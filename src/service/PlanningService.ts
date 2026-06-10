@@ -34,7 +34,7 @@ import {
   type BranchProject,
   type AlignmentAssessment,
 } from "~/domain/memory";
-import { classifyRequest, deriveRetrievalIntent } from "~/domain/request-classification";
+import { classifyRequest, deriveRetrievalIntent, requiresExternalStateChecks } from "~/domain/request-classification";
 import { partitionTasksByStaleness } from "~/domain/task-lifecycle";
 import {
   buildRequiredContextPack,
@@ -52,6 +52,7 @@ import {
   compactOperatingBrief,
   compactProject,
   compactSearchMemory,
+  compactRepoCoverage,
   compactSourceEvents,
   compactStrategyContext,
   compactTasks,
@@ -520,16 +521,19 @@ function recommendedLiveChecks(input: {
   sourceEvents: SourceEvent[];
   warnings: string[];
   currentTruthChecks?: unknown[];
+  externalStateRelevant: boolean;
 }) {
   const checks = new Set<string>();
-  for (const source of input.activeSources ?? []) {
-    checks.add(`Check live ${source} for fresh context before writing durable summaries.`);
-  }
-  if (input.tasks.some((task) => task.dueAt || task.reminderAt)) {
-    checks.add("Check calendar/reminder source for due-date freshness.");
-  }
-  if (input.sourceEvents.length === 0) {
-    checks.add("If this task depends on CRM/email/calendar/shopify state, query that live MCP before deciding.");
+  if (input.externalStateRelevant) {
+    for (const source of input.activeSources ?? []) {
+      checks.add(`Check live ${source} for fresh context before writing durable summaries.`);
+    }
+    if (input.tasks.some((task) => task.dueAt || task.reminderAt)) {
+      checks.add("Check calendar/reminder source for due-date freshness.");
+    }
+    if (input.sourceEvents.length === 0) {
+      checks.add("If this task depends on CRM/email/calendar/shopify state, query that live MCP before deciding.");
+    }
   }
   if (input.warnings.some((warning) => warning.includes("semantic"))) {
     checks.add("Run retrieval_diagnostics and consider reindexing before assuming memory is complete.");
@@ -1130,6 +1134,7 @@ export class PlanningService {
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
+        externalStateRelevant: requiresExternalStateChecks(assistantActionPlan.request_classification),
       }),
       write_back_policy: writeBackPolicy,
       retrieval_guidance: retrievalGuidance(),
@@ -1141,6 +1146,7 @@ export class PlanningService {
       return session;
     }
 
+    const compactedRepoCoverage = compactRepoCoverage(contextCompleteness.repo_coverage);
     return enforceCompactSessionBudget({
       ...session,
       context_resolution: compactContextResolution(resolution),
@@ -1159,6 +1165,11 @@ export class PlanningService {
       operating_brief: compactOperatingBrief(operatingBrief),
       write_back_policy: compactWriteBackPolicy(writeBackPolicy),
       recommended_live_mcp_checks: compactLiveCheckRecommendations(session.recommended_live_mcp_checks),
+      repo_coverage: compactedRepoCoverage,
+      context_completeness: {
+        ...contextCompleteness,
+        repo_coverage: compactedRepoCoverage,
+      },
     });
   }
 
@@ -1314,6 +1325,7 @@ export class PlanningService {
     }
 
     const compactStrategy = compactStrategyContext(strategy.strategy_context);
+    const compactedRepoCoverage = compactRepoCoverage(contextCompleteness.repo_coverage);
     return enforceCompactSessionBudget({
       ...response,
       context_resolution: compactContextResolution(resolution),
@@ -1324,6 +1336,11 @@ export class PlanningService {
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
       tool_plan: compactToolPlan(actionPlan.tool_plan),
       operating_brief: compactOperatingBrief(operatingBrief, "active_tasks"),
+      repo_coverage: compactedRepoCoverage,
+      context_completeness: {
+        ...contextCompleteness,
+        repo_coverage: compactedRepoCoverage,
+      },
     });
   }
 

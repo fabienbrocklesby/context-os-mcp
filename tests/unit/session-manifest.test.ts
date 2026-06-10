@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectCurrentContextManifest, MAX_MANIFEST_DOCUMENTS } from "~/domain/session";
+import { selectCurrentContextManifest, MAX_MANIFEST_DOCUMENTS, compactRepoCoverage } from "~/domain/session";
 import type { ResolvedMemoryDocument } from "~/domain/memory";
 
 function doc(over: Partial<ResolvedMemoryDocument>): ResolvedMemoryDocument {
@@ -40,5 +40,16 @@ describe("selectCurrentContextManifest", () => {
     const ids = selectCurrentContextManifest(docs).map((d) => d.id);
     expect(ids.indexOf("knowledge-note")).toBeLessThan(ids.indexOf("operational"));
     expect(ids.indexOf("operational")).toBeLessThan(ids.indexOf("entity"));
+  });
+});
+
+describe("compactRepoCoverage", () => {
+  it("reduces a full coverage block to complete + missing only", () => {
+    const full = { required: ["a/b", "c/d", "e/f", "g/h"], present: ["a/b", "c/d", "e/f", "g/h"], missing: [], complete: true };
+    expect(compactRepoCoverage(full)).toEqual({ complete: true, missing: [] });
+  });
+  it("keeps the missing list when coverage is incomplete", () => {
+    const full = { required: ["a/b", "c/d"], present: ["a/b"], missing: ["c/d"], complete: false };
+    expect(compactRepoCoverage(full)).toEqual({ complete: false, missing: ["c/d"] });
   });
 });

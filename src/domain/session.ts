@@ -314,6 +314,15 @@ export function compactLiveCheckRecommendations(checks: unknown[]) {
   return checks.map((check) => truncate(stringOrNull(check), 180));
 }
 
+export function compactRepoCoverage(
+  coverage: { complete?: boolean; missing?: string[] } | null | undefined,
+): { complete: boolean; missing: string[] } {
+  return {
+    complete: Boolean(coverage?.complete),
+    missing: coverage?.missing ?? [],
+  };
+}
+
 export function retrievalGuidance() {
   return {
     message:

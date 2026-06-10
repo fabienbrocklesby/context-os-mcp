@@ -122,6 +122,20 @@ export function deriveRetrievalIntent(
   return "general";
 }
 
+/**
+ * Whether a classified request depends on live external state (CRM, mail, calendar,
+ * shopify, etc.) and should therefore trigger external-source live checks. Pure memory
+ * or code-repo intents do not; current-state queries are covered separately via the
+ * current-truth required_live_checks.
+ */
+export function requiresExternalStateChecks(classification: RequestClassification): boolean {
+  return (
+    classification.categories.customer_sales_business ||
+    classification.categories.planning_scheduling ||
+    classification.categories.external_source_dependent
+  );
+}
+
 function primaryCategory(categories: RequestClassification["categories"]): RequestPrimaryCategory {
   if (categories.code_repo) {
     return "code_repo";
