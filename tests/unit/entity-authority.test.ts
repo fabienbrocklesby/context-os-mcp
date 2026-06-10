@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { deriveNotCurrentEntities, markContradictedHits } from "~/domain/entity-authority";
+import { describe, it, expect, vi } from "vitest";
+import { computeNotCurrentEntities, deriveNotCurrentEntities, markContradictedHits } from "~/domain/entity-authority";
 import type { MemorySearchHit } from "~/domain/memory";
 
 function hit(over: Partial<MemorySearchHit>): MemorySearchHit {
@@ -60,6 +60,43 @@ describe("deriveNotCurrentEntities", () => {
         { stateKey: "next_action", value: "lost-contact-recovery-call", status: "active" },
       ] },
     ]);
+    expect(result).toEqual([]);
+  });
+});
+
+describe("computeNotCurrentEntities", () => {
+  function fakeRepo(entities: Array<{ id: string; name: string; slug: string }>, states: Array<{ entityId: string; stateKey: string; value: unknown; status: string }>) {
+    return {
+      searchEntities: async () => entities,
+      listEntityStatesForEntities: async () => states,
+    };
+  }
+
+  it("returns entities flagged not-current by an active volatile state", async () => {
+    const repo = fakeRepo(
+      [{ id: "e1", name: "Fivestar Print", slug: "fivestar-print" }, { id: "e2", name: "Talley's Group", slug: "talleys-group" }],
+      [
+        { entityId: "e1", stateKey: "deal_stage", value: "parked_legacy_not_current_pipeline", status: "active" },
+        { entityId: "e2", stateKey: "deal_stage", value: "active_multi_site_evaluation", status: "active" },
+      ],
+    );
+    const result = await computeNotCurrentEntities(repo, "light-lane");
+    expect(result.map((r) => r.entityId)).toEqual(["e1"]);
+  });
+
+  it("returns [] when the repo throws (best-effort)", async () => {
+    const repo = {
+      searchEntities: async () => { throw new Error("db down"); },
+      listEntityStatesForEntities: async () => [],
+    };
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await computeNotCurrentEntities(repo, "light-lane");
+    expect(result).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("returns [] when no entities exist", async () => {
+    const result = await computeNotCurrentEntities(fakeRepo([], []), "light-lane");
     expect(result).toEqual([]);
   });
 });

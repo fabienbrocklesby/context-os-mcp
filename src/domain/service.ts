@@ -58,6 +58,7 @@ import {
   type StrategyNode,
   type MemoryLayer,
 } from "~/domain/memory";
+import { computeNotCurrentEntities, markContradictedHits } from "~/domain/entity-authority";
 import { rerankSearchHits } from "~/domain/ranking";
 import { classifyRequest, deriveRetrievalIntent, type RetrievalIntent } from "~/domain/request-classification";
 import {
@@ -865,10 +866,12 @@ export class MemoryService {
             }))
             .filter((hit) => isVisibleInProjectScope(hit, normalizedProject));
 
+          const notCurrentEntities = await computeNotCurrentEntities(this.repo, normalizedProject);
+          const markedHits = markContradictedHits(hydratedHits, notCurrentEntities);
           return {
             hits: rawVectorHits,
             ranked: applyDocumentDiversity(
-              rerankSearchHits(hydratedHits, {
+              rerankSearchHits(markedHits, {
                 includeSuperseded: input.includeSuperseded,
                 project: normalizedProject,
                 repo: input.repo,
