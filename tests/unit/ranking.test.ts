@@ -174,6 +174,19 @@ describe("stale-volatile hard gate", () => {
   });
 });
 
+describe("namespace weighting", () => {
+  it("ranks a project doc above a shared doc with a higher base score", () => {
+    const ranked = rerankSearchHits(
+      [
+        makeHit({ documentId: "shared-strong", project: "shared", namespace: "shared", score: 0.85 }),
+        makeHit({ documentId: "project-own", project: "light-lane", namespace: "light-lane", score: 0.55 }),
+      ],
+      { project: "light-lane", includeSuperseded: true },
+    );
+    expect(ranked[0]?.documentId).toBe("project-own");
+  });
+});
+
 describe("entity-state contradiction penalty", () => {
   it("demotes a hit contradicted by current state below an equal uncontradicted hit", () => {
     const ranked = rerankSearchHits(

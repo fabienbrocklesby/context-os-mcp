@@ -85,9 +85,9 @@ function computeRankingScore(
   if (hit.memoryLayer === "knowledge") score += 0.15;
   if (hit.memoryLayer === "event_log") score -= 0.40;
 
-  // Project match
-  if (options.project && hit.project === options.project) score += 0.18;
-  if (options.project && hit.project === "shared") score -= 0.03;
+  // Namespace weighting: a project's own docs decisively win its own queries.
+  if (options.project && hit.project === options.project) score += 0.3;
+  if (options.project && hit.project === "shared" && options.project !== "shared") score -= 0.2;
 
   // Repo and path match
   if (options.repo && hit.repo === options.repo.toLowerCase()) score += 0.08;
