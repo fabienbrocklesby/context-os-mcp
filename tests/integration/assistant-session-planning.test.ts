@@ -80,6 +80,7 @@ const mocks = vi.hoisted(() => ({
   getChunkContentsByVectorIds: vi.fn(),
   getDocumentsByIds: vi.fn(),
   getLatestSnapshot: vi.fn(),
+  findDocumentsByLayer: vi.fn(),
 }));
 
 vi.mock("~/integrations/workers-ai/embeddings", () => ({
@@ -186,6 +187,10 @@ vi.mock("~/persistence/d1/repository", () => ({
     getLatestSnapshot(documentId: string) {
       return mocks.getLatestSnapshot(documentId);
     }
+
+    findDocumentsByLayer(input: unknown) {
+      return mocks.findDocumentsByLayer(input);
+    }
   },
 }));
 
@@ -223,6 +228,7 @@ describe("MemoryService assistant session reliability planning", () => {
     mocks.getLatestSnapshot.mockResolvedValue({
       rawMarkdown: "# Context\n\nfull context body",
     });
+    mocks.findDocumentsByLayer.mockResolvedValue([]);
   });
 
   it("adds reliability fields to prepare_assistant_session without removing existing fields", async () => {
@@ -560,6 +566,121 @@ describe("MemoryService assistant session reliability planning", () => {
       repo_coverage: true,
       business_brain_loaded: true,
     });
+  });
+
+  it("surfaces the active project's situation document", async () => {
+    mocks.findDocumentsByLayer.mockImplementation(async (input: { project: string }) => {
+      if (input.project === "memory-system-mcp") {
+        return [
+          {
+            id: "sit-active",
+            path: "/memory/projects/memory-system-mcp/context/current/situation.md",
+            bodyMarkdown: "# Situation\n\nTraceability infrastructure positioning is current.",
+            memoryLayer: "situation",
+            project: "memory-system-mcp",
+          } as unknown as ResolvedMemoryDocument,
+        ];
+      }
+      return [];
+    });
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = (await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "what is going on",
+      now: "2026-06-10T07:00:00.000Z",
+    })) as { situation: { content: string | null; path: string } | null };
+
+    expect(result.situation).not.toBeNull();
+    expect(result.situation?.path).toBe(
+      "/memory/projects/memory-system-mcp/context/current/situation.md",
+    );
+    expect(result.situation?.content).toContain("Traceability infrastructure");
+    expect(mocks.findDocumentsByLayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: "memory-system-mcp",
+        memoryLayer: "situation",
+        canonical: true,
+      }),
+    );
+  });
+
+  it("falls back to the shared situation document when the project has none", async () => {
+    const calls: string[] = [];
+    mocks.findDocumentsByLayer.mockImplementation(async (input: { project: string }) => {
+      calls.push(input.project);
+      if (input.project === "shared") {
+        return [
+          {
+            id: "sit-shared",
+            path: "/memory/shared/context/current/situation.md",
+            bodyMarkdown: "# Shared Situation",
+            memoryLayer: "situation",
+            project: "shared",
+          } as unknown as ResolvedMemoryDocument,
+        ];
+      }
+      return [];
+    });
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = (await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "what is going on",
+      now: "2026-06-10T07:00:00.000Z",
+    })) as { situation: { content: string | null; path: string } | null };
+
+    expect(result.situation?.path).toBe("/memory/shared/context/current/situation.md");
+    expect(calls[0]).toBe("memory-system-mcp");
+    expect(calls).toContain("shared");
+  });
+
+  it("buckets tasks overdue by more than 14 days out of the default surface", async () => {
+    const stale: ContextTask = {
+      ...makeTask(0),
+      id: "stale-may",
+      title: "Emergency cashflow sprint (May)",
+      priority: "urgent",
+      dueAt: "2026-05-01T09:00:00+12:00",
+    };
+    const future: ContextTask = {
+      ...makeTask(1),
+      id: "live-future",
+      title: "Talley's follow-up",
+      priority: "high",
+      dueAt: "2026-06-13T09:00:00+12:00",
+    };
+    const undated: ContextTask = {
+      ...makeTask(2),
+      id: "live-undated",
+      title: "Write positioning brief",
+      priority: "normal",
+      dueAt: null,
+    };
+    mocks.listTasks.mockResolvedValue([stale, future, undated]);
+
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = (await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "what should I do today",
+      now: "2026-06-10T07:00:00.000Z",
+    })) as {
+      tasks: Array<{ id: string }>;
+      needs_review_tasks: Array<{ id: string }>;
+      operating_brief: { current_tasks_milestones: { overdue_count: number } };
+    };
+
+    const liveIds = result.tasks.map((t) => t.id);
+    const reviewIds = result.needs_review_tasks.map((t) => t.id);
+    expect(liveIds).toContain("live-future");
+    expect(liveIds).toContain("live-undated");
+    expect(liveIds).not.toContain("stale-may");
+    expect(reviewIds).toEqual(["stale-may"]);
+    expect(result.operating_brief.current_tasks_milestones.overdue_count).toBe(0);
   });
 });
 

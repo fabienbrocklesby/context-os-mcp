@@ -64,6 +64,36 @@ Decision body.`,
     expect(parsed.body).toBe("# Ignore this heading\n\nDecision body.");
   });
 
+  it("preserves an explicit memory_layer so the situation layer survives indexing", () => {
+    const parsed = parseMarkdownDocument(
+      "/memory/projects/light-lane/context/current/situation.md",
+      `---
+title: Current Situation
+project: light-lane
+memory_type: current_context
+status: active
+revision: 1
+canonical: true
+memory_layer: situation
+---
+
+# Light Lane — Current Situation
+
+Positioning body.`,
+      "system",
+    );
+
+    expect(parsed.frontmatter.memory_layer).toBe("situation");
+  });
+
+  it("leaves memory_layer undefined when the frontmatter omits it", () => {
+    const parsed = parseMarkdownDocument(
+      "/memory/projects/alpha/knowledge/facts/some-fact.md",
+      "# Fact\n\nbody",
+    );
+    expect(parsed.frontmatter.memory_layer).toBeUndefined();
+  });
+
   it("infers snippets and repo indexes from their folder paths", () => {
     expect(
       parseMarkdownDocument(

@@ -207,22 +207,26 @@ export function registerMemoryTools(
         markdown: z.string().min(1),
         tags: z.array(z.string()).optional(),
         supersedes_document_ids: z.array(z.string()).optional(),
+        canonical_key: z.string().optional().describe("Stable topic key (slug). Writing a decision with this key supersedes any prior active document carrying the same key, so current truth replaces stale truth automatically."),
         author_client: z.string().optional(),
       }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    async ({ project, title, markdown, tags, supersedes_document_ids, author_client }) =>
+    async ({ project, title, markdown, tags, supersedes_document_ids, canonical_key, author_client }) =>
       textResult(await docSvc.recordDecision({
         project, title, markdown, tags,
-        supersedesDocumentIds: supersedes_document_ids, authorClient: author_client,
+        supersedesDocumentIds: supersedes_document_ids, canonicalKey: canonical_key,
+        authorClient: author_client,
       })),
   );
 
   server.registerTool(
     "upsert_situation",
     {
-      description: "Create or update the cross-initiative situational awareness document. Include your current financial position, location, top priorities this week, and key constraints. The AI reads this first on every session to enable intelligent cross-initiative advice.",
+      description: "Create or update a situational awareness document. Omit project for the cross-initiative shared situation; pass a project slug to author that project's own situation document (read first on every session for that project). Include current financial position, location, top priorities, and key constraints, or supply body_markdown for a free-form situation.",
       inputSchema: z.object({
+        project: z.string().optional().describe("Project slug to scope this situation document to. Omit for the cross-initiative shared situation."),
+        body_markdown: z.string().optional().describe("Free-form markdown body. When provided, it becomes the situation body verbatim instead of the structured sections."),
         financial_position: z.string().optional().describe("Current financial position, e.g. 'Cash tight, need $X by end of month'"),
         location: z.string().optional().describe("Where you are and where you're going"),
         top_priorities: z.array(z.string()).optional().describe("Your top 3-5 priorities this week across all initiatives"),
@@ -393,6 +397,7 @@ export function registerMemoryTools(
         project: z.string().optional(),
         text: z.string().min(1),
         title: z.string().optional(),
+        fact_key: z.string().optional().describe("Stable topic key. Reusing a key for the same project upserts that fact in place (UNIQUE(project, fact_key)), so a new value replaces the prior one instead of accumulating duplicates."),
         source: z.string().optional(),
         source_url: z.string().optional(),
         confidence: z.number().min(0).max(1).optional(),
@@ -402,9 +407,9 @@ export function registerMemoryTools(
       }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    async ({ project, text, title, source, source_url, confidence, initiative_id, entity_id, save }) =>
+    async ({ project, text, title, fact_key, source, source_url, confidence, initiative_id, entity_id, save }) =>
       textResult(await entitySvc.extractDurableFacts({
-        project, text, title, source, sourceUrl: source_url, confidence,
+        project, text, title, factKey: fact_key, source, sourceUrl: source_url, confidence,
         initiativeId: initiative_id, entityId: entity_id, save,
       })),
   );

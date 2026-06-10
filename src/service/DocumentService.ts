@@ -742,6 +742,7 @@ export class DocumentService {
     markdown: string;
     tags?: string[];
     supersedesDocumentIds?: string[];
+    canonicalKey?: string;
     authorClient?: string;
   }) {
     const project = normalizeProject(input.project);
@@ -762,7 +763,12 @@ export class DocumentService {
       memory_type: "decision",
       status: "active",
       canonical: false,
-      tags: input.tags ?? parsed.frontmatter.tags,
+      tags: input.canonicalKey
+        ? [
+            ...(input.tags ?? parsed.frontmatter.tags ?? []),
+            `canonical-key:${input.canonicalKey}`,
+          ]
+        : (input.tags ?? parsed.frontmatter.tags),
       supersedes: input.supersedesDocumentIds ?? parsed.frontmatter.supersedes,
       author_client: input.authorClient ?? this.principal.login,
     });
@@ -784,6 +790,16 @@ export class DocumentService {
       await this.docRepo.markDocumentsSuperseded({
         documentIds: input.supersedesDocumentIds,
       });
+    }
+    if (input.canonicalKey) {
+      const priorDocs = await this.docRepo.findActiveDocumentsByCanonicalKey({
+        project,
+        canonicalKey: input.canonicalKey,
+      });
+      const priorIds = priorDocs.map((doc) => doc.id);
+      if (priorIds.length) {
+        await this.docRepo.markDocumentsSuperseded({ documentIds: priorIds });
+      }
     }
     return { path, workdrive_file_id: uploaded.id, job_id: jobId };
   }
@@ -1001,6 +1017,8 @@ export class DocumentService {
   }
 
   async setSituationDocument(input: {
+    project?: string;
+    body_markdown?: string;
     financial_position?: string;
     location?: string;
     top_priorities?: string[];
@@ -1008,7 +1026,7 @@ export class DocumentService {
     active_initiatives?: string[];
     notes?: string;
   }) {
-    const project = "shared";
+    const project = normalizeProject(input.project);
     await this.ensureProjectMinimal({ project });
 
     const sections: string[] = ["# Current Situation"];
@@ -1038,7 +1056,9 @@ export class DocumentService {
       sections.push(`## Notes\n${input.notes}`);
     }
 
-    const body = sections.join("\n\n");
+    const body = input.body_markdown?.trim()
+      ? input.body_markdown.trim()
+      : sections.join("\n\n");
     const path = buildLogicalPath(project, ["context", "current"], "situation.md");
     const existing = await this.docRepo.getDocumentByPath(path);
     const now = new Date().toISOString();

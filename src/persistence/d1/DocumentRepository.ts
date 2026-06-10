@@ -383,8 +383,8 @@ export class DocumentRepository {
               id, workdrive_file_id, path, title, project, namespace, parent_folder_id, file_name,
               permalink, download_url, memory_type, status, canonical, active, revision,
               current_snapshot_id, last_remote_modified_at, last_indexed_at, source, source_url,
-              repo, repo_path, tags_json, confidence, usefulness, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?26)
+              repo, repo_path, tags_json, confidence, usefulness, created_at, updated_at, memory_layer
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?26, ?27)
             ON CONFLICT(id) DO UPDATE SET
               workdrive_file_id = excluded.workdrive_file_id,
               path = excluded.path,
@@ -410,6 +410,7 @@ export class DocumentRepository {
               tags_json = excluded.tags_json,
               confidence = excluded.confidence,
               usefulness = excluded.usefulness,
+              memory_layer = excluded.memory_layer,
               updated_at = excluded.updated_at
           `,
         )
@@ -440,6 +441,7 @@ export class DocumentRepository {
           input.confidence ?? null,
           input.usefulness ?? null,
           now,
+          input.frontmatter.memory_layer ?? null,
         ),
       this.db
         .prepare(
@@ -626,6 +628,27 @@ export class DocumentRepository {
       .bind(input.project, input.memoryLayer, ...canonicalBind, limit)
       .all<DocumentRow & { raw_markdown?: string; body_markdown?: string; frontmatter_json?: string }>();
     return rows.results.map((row) => mapDocument(row)!).filter(Boolean);
+  }
+
+  async findActiveDocumentsByCanonicalKey(input: {
+    project: string;
+    canonicalKey: string;
+    excludeDocumentId?: string;
+  }): Promise<ResolvedMemoryDocument[]> {
+    const tag = `canonical-key:${input.canonicalKey}`.toLowerCase();
+    const rows = await this.db
+      .prepare(
+        `SELECT * FROM documents
+         WHERE project = ?1
+           AND active = 1
+           AND status NOT IN ('archived', 'superseded')
+           AND instr(lower(COALESCE(tags_json, '')), ?2) > 0`,
+      )
+      .bind(input.project, tag)
+      .all<DocumentRow>();
+    return rows.results
+      .map((row) => mapDocument(row)!)
+      .filter((doc) => Boolean(doc) && doc.id !== input.excludeDocumentId);
   }
 
   async listProjectAliases() {

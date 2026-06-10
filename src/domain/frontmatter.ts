@@ -60,6 +60,7 @@ export function parseMarkdownDocument(
       supersedes: parsed.supersedes ?? [],
       superseded_by: parsed.superseded_by ?? [],
       canonical: parsed.canonical ?? inferMemoryTypeFromPath(path) === "current_context",
+      memory_layer: parsed.memory_layer,
     }),
     body: rawBody.trim(),
   };

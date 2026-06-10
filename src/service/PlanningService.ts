@@ -35,6 +35,7 @@ import {
   type AlignmentAssessment,
 } from "~/domain/memory";
 import { classifyRequest, deriveRetrievalIntent } from "~/domain/request-classification";
+import { partitionTasksByStaleness } from "~/domain/task-lifecycle";
 import {
   buildRequiredContextPack,
   inferTaskProfile,
@@ -766,15 +767,25 @@ export class PlanningService {
     };
   }
 
-  private async findSituationDocument(): Promise<ResolvedMemoryDocument | null> {
+  private async findSituationDocument(project: string): Promise<ResolvedMemoryDocument | null> {
     try {
-      const docs = await this.documentRepo.findDocumentsByLayer({
-        project: "shared",
+      const scoped = await this.documentRepo.findDocumentsByLayer({
+        project,
         memoryLayer: "situation",
         canonical: true,
         limit: 1,
       });
-      return docs[0] ?? null;
+      if (scoped[0]) return scoped[0];
+      if (project !== "shared") {
+        const shared = await this.documentRepo.findDocumentsByLayer({
+          project: "shared",
+          memoryLayer: "situation",
+          canonical: true,
+          limit: 1,
+        });
+        return shared[0] ?? null;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -937,13 +948,13 @@ export class PlanningService {
     taskProfile?: TaskProfile;
     responseMode?: AssistantSessionResponseMode;
   }) {
-    const situationDoc = await this.findSituationDocument();
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
       userIntent: input.userIntent,
     });
     const activeProject = resolution.active_project;
     const project = activeProject.slug;
+    const situationDoc = await this.findSituationDocument(project);
     const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
     const requiredContextPack = buildRequiredContextPack({
       project,
@@ -976,7 +987,7 @@ export class PlanningService {
       this.initiativeRepo.listInitiatives({ project, status: "active", limit: 10 }),
       this.projectRepo.listRelatedProjects(project),
       this.entityRepo.searchEntities({ project, query: input.userIntent, limit: 12 }),
-      this.entityRepo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
+      this.entityRepo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 50 }),
       this.entityRepo.listSourceEvents({ project, limit: 10 }),
       this.entityRepo.listFacts({ project, limit: 12 }),
       this.projectStatusInternal({ project }),
@@ -1058,6 +1069,10 @@ export class PlanningService {
       strategyContext: strategyContext.strategy_context,
       save: false,
     });
+    const { live: liveTasks, needsReview: needsReviewTasks } = partitionTasksByStaleness(
+      tasks,
+      assistantActionPlan.operational_context.now_utc,
+    );
     const operatingBrief = buildOperatingBrief({
       userIntent: input.userIntent,
       contextResolution: resolution,
@@ -1070,7 +1085,7 @@ export class PlanningService {
       alignmentAssessment,
       groupedMemory,
       contextHealth,
-      tasks,
+      tasks: liveTasks,
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
@@ -1099,7 +1114,8 @@ export class PlanningService {
       grouped_memory: groupedMemory,
       current_truth: currentTruth,
       entities,
-      tasks,
+      tasks: liveTasks,
+      needs_review_tasks: needsReviewTasks,
       source_events: sourceEvents,
       facts,
       context_health: contextHealth,
@@ -1110,7 +1126,7 @@ export class PlanningService {
         project,
         activeSources: input.activeSources,
         entities,
-        tasks,
+        tasks: liveTasks,
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
@@ -1134,7 +1150,8 @@ export class PlanningService {
       current_context: currentContext,
       grouped_memory: compactSearchMemory(groupedMemory),
       entities: compactEntities(entities),
-      tasks: compactTasks(tasks),
+      tasks: compactTasks(liveTasks),
+      needs_review_tasks: compactTasks(needsReviewTasks),
       source_events: compactSourceEvents(sourceEvents),
       facts: compactFacts(facts),
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),

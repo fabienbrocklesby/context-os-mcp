@@ -67,6 +67,7 @@ import {
   type TaskProfile,
 } from "~/domain/retrieval-policy";
 import { isVisibleInProjectScope } from "~/domain/scope";
+import { partitionTasksByStaleness } from "~/domain/task-lifecycle";
 import {
   compactContextResolution,
   compactCurrentContextDocuments,
@@ -1083,15 +1084,25 @@ export class MemoryService {
     };
   }
 
-  private async findSituationDocument(): Promise<ResolvedMemoryDocument | null> {
+  private async findSituationDocument(project: string): Promise<ResolvedMemoryDocument | null> {
     try {
-      const docs = await this.repo.findDocumentsByLayer({
-        project: "shared",
+      const scoped = await this.repo.findDocumentsByLayer({
+        project,
         memoryLayer: "situation",
         canonical: true,
         limit: 1,
       });
-      return docs[0] ?? null;
+      if (scoped[0]) return scoped[0];
+      if (project !== "shared") {
+        const shared = await this.repo.findDocumentsByLayer({
+          project: "shared",
+          memoryLayer: "situation",
+          canonical: true,
+          limit: 1,
+        });
+        return shared[0] ?? null;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -1114,13 +1125,13 @@ export class MemoryService {
     taskProfile?: TaskProfile;
     responseMode?: AssistantSessionResponseMode;
   }) {
-    const situationDoc = await this.findSituationDocument();
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
       userIntent: input.userIntent,
     });
     const activeProject = resolution.active_project;
     const project = activeProject.slug;
+    const situationDoc = await this.findSituationDocument(project);
     const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
     const requiredContextPack = buildRequiredContextPack({
       project,
@@ -1153,7 +1164,7 @@ export class MemoryService {
       this.repo.listInitiatives({ project, status: "active", limit: 10 }),
       this.repo.listRelatedProjects(project),
       this.repo.searchEntities({ project, query: input.userIntent, limit: 12 }),
-      this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
+      this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 50 }),
       this.repo.listSourceEvents({ project, limit: 10 }),
       this.repo.listFacts({ project, limit: 12 }),
       this.projectStatus({ project }),
@@ -1228,6 +1239,10 @@ export class MemoryService {
       strategyContext: strategyContext.strategy_context,
       save: false,
     });
+    const { live: liveTasks, needsReview: needsReviewTasks } = partitionTasksByStaleness(
+      tasks,
+      assistantActionPlan.operational_context.now_utc,
+    );
     const operatingBrief = buildOperatingBrief({
       userIntent: input.userIntent,
       contextResolution: resolution,
@@ -1240,7 +1255,7 @@ export class MemoryService {
       alignmentAssessment,
       groupedMemory,
       contextHealth,
-      tasks,
+      tasks: liveTasks,
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
@@ -1269,7 +1284,8 @@ export class MemoryService {
       grouped_memory: groupedMemory,
       current_truth: currentTruth,
       entities,
-      tasks,
+      tasks: liveTasks,
+      needs_review_tasks: needsReviewTasks,
       source_events: sourceEvents,
       facts,
       context_health: contextHealth,
@@ -1280,7 +1296,7 @@ export class MemoryService {
         project,
         activeSources: input.activeSources,
         entities,
-        tasks,
+        tasks: liveTasks,
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
@@ -1304,7 +1320,8 @@ export class MemoryService {
       current_context: currentContext,
       grouped_memory: compactSearchMemory(groupedMemory),
       entities: compactEntities(entities),
-      tasks: compactTasks(tasks),
+      tasks: compactTasks(liveTasks),
+      needs_review_tasks: compactTasks(needsReviewTasks),
       source_events: compactSourceEvents(sourceEvents),
       facts: compactFacts(facts),
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
@@ -1607,6 +1624,7 @@ export class MemoryService {
     project?: string;
     text: string;
     title?: string;
+    factKey?: string;
     source?: string;
     sourceUrl?: string;
     confidence?: number;
@@ -1618,7 +1636,9 @@ export class MemoryService {
     const extracted = extractFactCandidates(input.text).map((body, index) => ({
       title: input.title ?? `Extracted fact ${index + 1}`,
       body,
-      factKey: slugify(`${input.source ?? "manual"}-${body}`).slice(0, 140),
+      factKey: input.factKey
+        ? (index === 0 ? input.factKey : `${input.factKey}-${index}`)
+        : slugify(`${input.source ?? "manual"}-${body}`).slice(0, 140),
       source: input.source,
       sourceUrl: input.sourceUrl,
       confidence: input.confidence ?? 0.65,
@@ -2631,6 +2651,7 @@ export class MemoryService {
     markdown: string;
     tags?: string[];
     supersedesDocumentIds?: string[];
+    canonicalKey?: string;
     authorClient?: string;
   }) {
     const project = normalizeProject(input.project);
@@ -2646,7 +2667,12 @@ export class MemoryService {
       memory_type: "decision",
       status: "active",
       canonical: false,
-      tags: input.tags ?? parsed.frontmatter.tags,
+      tags: input.canonicalKey
+        ? [
+            ...(input.tags ?? parsed.frontmatter.tags ?? []),
+            `canonical-key:${input.canonicalKey}`,
+          ]
+        : (input.tags ?? parsed.frontmatter.tags),
       supersedes: input.supersedesDocumentIds ?? parsed.frontmatter.supersedes,
       author_client: input.authorClient ?? this.principal.login,
     });
@@ -2668,6 +2694,16 @@ export class MemoryService {
       await this.repo.markDocumentsSuperseded({
         documentIds: input.supersedesDocumentIds,
       });
+    }
+    if (input.canonicalKey) {
+      const priorDocs = await this.repo.findActiveDocumentsByCanonicalKey({
+        project,
+        canonicalKey: input.canonicalKey,
+      });
+      const priorIds = priorDocs.map((doc) => doc.id);
+      if (priorIds.length) {
+        await this.repo.markDocumentsSuperseded({ documentIds: priorIds });
+      }
     }
     return { path, workdrive_file_id: uploaded.id, job_id: jobId };
   }
@@ -3020,6 +3056,8 @@ export class MemoryService {
   }
 
   async setSituationDocument(input: {
+    project?: string;
+    body_markdown?: string;
     financial_position?: string;
     location?: string;
     top_priorities?: string[];
@@ -3027,7 +3065,7 @@ export class MemoryService {
     active_initiatives?: string[];
     notes?: string;
   }) {
-    const project = "shared";
+    const project = normalizeProject(input.project);
     await this.ensureProject({ project });
 
     const sections: string[] = ["# Current Situation"];
@@ -3057,7 +3095,9 @@ export class MemoryService {
       sections.push(`## Notes\n${input.notes}`);
     }
 
-    const body = sections.join("\n\n");
+    const body = input.body_markdown?.trim()
+      ? input.body_markdown.trim()
+      : sections.join("\n\n");
     const path = buildLogicalPath(project, ["context", "current"], "situation.md");
     const existing = await this.repo.getDocumentByPath(path);
     const now = new Date().toISOString();
