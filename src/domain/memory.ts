@@ -102,7 +102,8 @@ export type MemorySearchHit = {
   score: number;
   updatedAtUnix: number;
   url?: string;
-  memoryLayer?: MemoryLayer;
+  memoryLayer?: MemoryLayer | null;
+  contradictedByCurrentState?: boolean;
 };
 
 export type ResolvedMemoryDocument = {

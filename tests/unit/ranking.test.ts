@@ -174,6 +174,19 @@ describe("stale-volatile hard gate", () => {
   });
 });
 
+describe("entity-state contradiction penalty", () => {
+  it("demotes a hit contradicted by current state below an equal uncontradicted hit", () => {
+    const ranked = rerankSearchHits(
+      [
+        makeHit({ documentId: "parked", score: 0.75, contradictedByCurrentState: true }),
+        makeHit({ documentId: "live", score: 0.7 }),
+      ],
+      { includeSuperseded: true },
+    );
+    expect(ranked[0]?.documentId).toBe("live");
+  });
+});
+
 describe("multiplicative recency decay", () => {
   const NOW = Date.UTC(2026, 5, 10); // 2026-06-10
 

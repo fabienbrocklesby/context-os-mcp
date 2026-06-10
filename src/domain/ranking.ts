@@ -102,6 +102,9 @@ function computeRankingScore(
   if (hit.status === "historical") score -= 0.08;
   if (hit.superseded) score -= 0.25;
 
+  // Current structured entity state contradicts this document -> strong demotion.
+  if (hit.contradictedByCurrentState) score -= 0.6;
+
   // Curator signals
   score += (hit.usefulness ?? 0) * 0.04;
   score += (hit.confidence ?? 0) * 0.03;
