@@ -57,6 +57,7 @@ import type {
   BranchProjectRow,
   AlignmentAssessmentRow,
 } from "~/persistence/d1/types";
+import { chunkForBinding } from "./binding";
 
 export class MemoryRepository {
   constructor(private readonly db: D1Database) {}
@@ -672,32 +673,38 @@ export class MemoryRepository {
   }
 
   async getChunkContentsByVectorIds(vectorIds: string[]) {
-    if (vectorIds.length === 0) {
-      return new Map<string, string>();
+    const contents = new Map<string, string>();
+    const uniqueIds = [...new Set(vectorIds.filter(Boolean))];
+    for (const batch of chunkForBinding(uniqueIds)) {
+      const placeholders = batch.map((_, index) => `?${index + 1}`).join(", ");
+      const result = await this.db
+        .prepare(`SELECT vector_id, content FROM chunks WHERE vector_id IN (${placeholders})`)
+        .bind(...batch)
+        .all<ChunkLookupRow>();
+      for (const row of result.results) {
+        contents.set(row.vector_id, row.content);
+      }
     }
-    const placeholders = vectorIds.map((_, index) => `?${index + 1}`).join(", ");
-    const statement = this.db.prepare(
-      `SELECT vector_id, content FROM chunks WHERE vector_id IN (${placeholders})`,
-    );
-    const result = await statement.bind(...vectorIds).all<ChunkLookupRow>();
-    return new Map(result.results.map((row) => [row.vector_id, row.content]));
+    return contents;
   }
 
   async getDocumentsByIds(documentIds: string[]) {
-    if (documentIds.length === 0) {
-      return new Map<string, ResolvedMemoryDocument>();
-    }
+    const documents = new Map<string, ResolvedMemoryDocument>();
     const uniqueIds = [...new Set(documentIds.filter(Boolean))];
-    const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(", ");
-    const result = await this.db
-      .prepare(`SELECT * FROM documents WHERE id IN (${placeholders})`)
-      .bind(...uniqueIds)
-      .all<DocumentRow>();
-    return new Map(
-      result.results
-        .map((row) => mapDocument(row)!)
-        .map((document) => [document.id, document]),
-    );
+    for (const batch of chunkForBinding(uniqueIds)) {
+      const placeholders = batch.map((_, index) => `?${index + 1}`).join(", ");
+      const result = await this.db
+        .prepare(`SELECT * FROM documents WHERE id IN (${placeholders})`)
+        .bind(...batch)
+        .all<DocumentRow>();
+      for (const row of result.results) {
+        const document = mapDocument(row);
+        if (document) {
+          documents.set(document.id, document);
+        }
+      }
+    }
+    return documents;
   }
 
   async searchDocumentsKeyword(input: {
@@ -1889,41 +1896,56 @@ export class MemoryRepository {
       return [];
     }
     const limit = Math.min(input.limit ?? 200, 500);
-    const binds: Array<string | number> = [];
-    const entityPlaceholders = entityIds.map((entityId) => {
-      binds.push(entityId);
-      return `?${binds.length}`;
-    });
-    const conditions = [`entity_id IN (${entityPlaceholders.join(", ")})`];
-    if (input.project) {
-      binds.push(input.project);
-      conditions.push(`(project = ?${binds.length} OR project = 'shared')`);
-    }
-    if (!input.includeSuperseded) {
-      conditions.push("status = 'active'");
-    }
-    if (input.stateKeys?.length) {
-      const keyPlaceholders = input.stateKeys.map((key) => {
-        binds.push(key);
+    const rows: EntityStateRow[] = [];
+    for (const batch of chunkForBinding(entityIds)) {
+      const binds: Array<string | number> = [];
+      const entityPlaceholders = batch.map((entityId) => {
+        binds.push(entityId);
         return `?${binds.length}`;
       });
-      conditions.push(`state_key IN (${keyPlaceholders.join(", ")})`);
+      const conditions = [`entity_id IN (${entityPlaceholders.join(", ")})`];
+      if (input.project) {
+        binds.push(input.project);
+        conditions.push(`(project = ?${binds.length} OR project = 'shared')`);
+      }
+      if (!input.includeSuperseded) {
+        conditions.push("status = 'active'");
+      }
+      if (input.stateKeys?.length) {
+        const keyPlaceholders = input.stateKeys.map((key) => {
+          binds.push(key);
+          return `?${binds.length}`;
+        });
+        conditions.push(`state_key IN (${keyPlaceholders.join(", ")})`);
+      }
+      binds.push(limit);
+      const result = await this.db
+        .prepare(
+          `
+            SELECT * FROM entity_states
+            WHERE ${conditions.join(" AND ")}
+            ORDER BY
+              CASE status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
+              COALESCE(observed_at, updated_at) DESC
+            LIMIT ?${binds.length}
+          `,
+        )
+        .bind(...binds)
+        .all<EntityStateRow>();
+      rows.push(...result.results);
     }
-    binds.push(limit);
-    const result = await this.db
-      .prepare(
-        `
-          SELECT * FROM entity_states
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY
-            CASE status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
-            COALESCE(observed_at, updated_at) DESC
-          LIMIT ?${binds.length}
-        `,
-      )
-      .bind(...binds)
-      .all<EntityStateRow>();
-    return result.results.map((row) => mapEntityState(row)!);
+    // Re-apply the SQL ordering and limit across batches so multi-batch
+    // results match the single-statement behaviour.
+    const statusRank = (status: string) =>
+      status === "active" ? 0 : status === "superseded" ? 1 : 2;
+    rows.sort((a, b) => {
+      const rank = statusRank(a.status) - statusRank(b.status);
+      if (rank !== 0) {
+        return rank;
+      }
+      return (b.observed_at ?? b.updated_at).localeCompare(a.observed_at ?? a.updated_at);
+    });
+    return rows.slice(0, limit).map((row) => mapEntityState(row)!);
   }
 
   private async attachEntitiesToAliases(aliases: EntityAlias[]) {

@@ -18,6 +18,7 @@ import type {
   SnapshotRow,
   WorkdriveCanonicalizationManifestRow,
 } from "~/persistence/d1/types";
+import { chunkForBinding } from "./binding";
 
 export class DocumentRepository {
   constructor(private readonly db: D1Database) {}
@@ -111,32 +112,38 @@ export class DocumentRepository {
   }
 
   async getChunkContentsByVectorIds(vectorIds: string[]) {
-    if (vectorIds.length === 0) {
-      return new Map<string, string>();
+    const contents = new Map<string, string>();
+    const uniqueIds = [...new Set(vectorIds.filter(Boolean))];
+    for (const batch of chunkForBinding(uniqueIds)) {
+      const placeholders = batch.map((_, index) => `?${index + 1}`).join(", ");
+      const result = await this.db
+        .prepare(`SELECT vector_id, content FROM chunks WHERE vector_id IN (${placeholders})`)
+        .bind(...batch)
+        .all<ChunkLookupRow>();
+      for (const row of result.results) {
+        contents.set(row.vector_id, row.content);
+      }
     }
-    const placeholders = vectorIds.map((_, index) => `?${index + 1}`).join(", ");
-    const statement = this.db.prepare(
-      `SELECT vector_id, content FROM chunks WHERE vector_id IN (${placeholders})`,
-    );
-    const result = await statement.bind(...vectorIds).all<ChunkLookupRow>();
-    return new Map(result.results.map((row) => [row.vector_id, row.content]));
+    return contents;
   }
 
   async getDocumentsByIds(documentIds: string[]) {
-    if (documentIds.length === 0) {
-      return new Map<string, ResolvedMemoryDocument>();
-    }
+    const documents = new Map<string, ResolvedMemoryDocument>();
     const uniqueIds = [...new Set(documentIds.filter(Boolean))];
-    const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(", ");
-    const result = await this.db
-      .prepare(`SELECT * FROM documents WHERE id IN (${placeholders})`)
-      .bind(...uniqueIds)
-      .all<DocumentRow>();
-    return new Map(
-      result.results
-        .map((row) => mapDocument(row)!)
-        .map((document) => [document.id, document]),
-    );
+    for (const batch of chunkForBinding(uniqueIds)) {
+      const placeholders = batch.map((_, index) => `?${index + 1}`).join(", ");
+      const result = await this.db
+        .prepare(`SELECT * FROM documents WHERE id IN (${placeholders})`)
+        .bind(...batch)
+        .all<DocumentRow>();
+      for (const row of result.results) {
+        const document = mapDocument(row);
+        if (document) {
+          documents.set(document.id, document);
+        }
+      }
+    }
+    return documents;
   }
 
   async searchDocumentsKeyword(input: {

@@ -19,6 +19,7 @@ import type {
   SourceEventRow,
   TaskRow,
 } from "~/persistence/d1/types";
+import { chunkForBinding } from "./binding";
 
 export class EntityRepository {
   constructor(private readonly db: D1Database) {}
@@ -312,41 +313,56 @@ export class EntityRepository {
       return [];
     }
     const limit = Math.min(input.limit ?? 200, 500);
-    const binds: Array<string | number> = [];
-    const entityPlaceholders = entityIds.map((entityId) => {
-      binds.push(entityId);
-      return `?${binds.length}`;
-    });
-    const conditions = [`entity_id IN (${entityPlaceholders.join(", ")})`];
-    if (input.project) {
-      binds.push(input.project);
-      conditions.push(`(project = ?${binds.length} OR project = 'shared')`);
-    }
-    if (!input.includeSuperseded) {
-      conditions.push("status = 'active'");
-    }
-    if (input.stateKeys?.length) {
-      const keyPlaceholders = input.stateKeys.map((key) => {
-        binds.push(key);
+    const rows: EntityStateRow[] = [];
+    for (const batch of chunkForBinding(entityIds)) {
+      const binds: Array<string | number> = [];
+      const entityPlaceholders = batch.map((entityId) => {
+        binds.push(entityId);
         return `?${binds.length}`;
       });
-      conditions.push(`state_key IN (${keyPlaceholders.join(", ")})`);
+      const conditions = [`entity_id IN (${entityPlaceholders.join(", ")})`];
+      if (input.project) {
+        binds.push(input.project);
+        conditions.push(`(project = ?${binds.length} OR project = 'shared')`);
+      }
+      if (!input.includeSuperseded) {
+        conditions.push("status = 'active'");
+      }
+      if (input.stateKeys?.length) {
+        const keyPlaceholders = input.stateKeys.map((key) => {
+          binds.push(key);
+          return `?${binds.length}`;
+        });
+        conditions.push(`state_key IN (${keyPlaceholders.join(", ")})`);
+      }
+      binds.push(limit);
+      const result = await this.db
+        .prepare(
+          `
+            SELECT * FROM entity_states
+            WHERE ${conditions.join(" AND ")}
+            ORDER BY
+              CASE status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
+              COALESCE(observed_at, updated_at) DESC
+            LIMIT ?${binds.length}
+          `,
+        )
+        .bind(...binds)
+        .all<EntityStateRow>();
+      rows.push(...result.results);
     }
-    binds.push(limit);
-    const result = await this.db
-      .prepare(
-        `
-          SELECT * FROM entity_states
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY
-            CASE status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
-            COALESCE(observed_at, updated_at) DESC
-          LIMIT ?${binds.length}
-        `,
-      )
-      .bind(...binds)
-      .all<EntityStateRow>();
-    return result.results.map((row) => mapEntityState(row)!);
+    // Re-apply the SQL ordering and limit across batches so multi-batch
+    // results match the single-statement behaviour.
+    const statusRank = (status: string) =>
+      status === "active" ? 0 : status === "superseded" ? 1 : 2;
+    rows.sort((a, b) => {
+      const rank = statusRank(a.status) - statusRank(b.status);
+      if (rank !== 0) {
+        return rank;
+      }
+      return (b.observed_at ?? b.updated_at).localeCompare(a.observed_at ?? a.updated_at);
+    });
+    return rows.slice(0, limit).map((row) => mapEntityState(row)!);
   }
 
   private async attachEntitiesToAliases(aliases: EntityAlias[]) {
