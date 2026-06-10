@@ -67,6 +67,7 @@ import {
   type TaskProfile,
 } from "~/domain/retrieval-policy";
 import { isVisibleInProjectScope } from "~/domain/scope";
+import { partitionTasksByStaleness } from "~/domain/task-lifecycle";
 import {
   compactContextResolution,
   compactCurrentContextDocuments,
@@ -1163,7 +1164,7 @@ export class MemoryService {
       this.repo.listInitiatives({ project, status: "active", limit: 10 }),
       this.repo.listRelatedProjects(project),
       this.repo.searchEntities({ project, query: input.userIntent, limit: 12 }),
-      this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
+      this.repo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 50 }),
       this.repo.listSourceEvents({ project, limit: 10 }),
       this.repo.listFacts({ project, limit: 12 }),
       this.projectStatus({ project }),
@@ -1238,6 +1239,10 @@ export class MemoryService {
       strategyContext: strategyContext.strategy_context,
       save: false,
     });
+    const { live: liveTasks, needsReview: needsReviewTasks } = partitionTasksByStaleness(
+      tasks,
+      assistantActionPlan.operational_context.now_utc,
+    );
     const operatingBrief = buildOperatingBrief({
       userIntent: input.userIntent,
       contextResolution: resolution,
@@ -1250,7 +1255,7 @@ export class MemoryService {
       alignmentAssessment,
       groupedMemory,
       contextHealth,
-      tasks,
+      tasks: liveTasks,
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
@@ -1279,7 +1284,8 @@ export class MemoryService {
       grouped_memory: groupedMemory,
       current_truth: currentTruth,
       entities,
-      tasks,
+      tasks: liveTasks,
+      needs_review_tasks: needsReviewTasks,
       source_events: sourceEvents,
       facts,
       context_health: contextHealth,
@@ -1290,7 +1296,7 @@ export class MemoryService {
         project,
         activeSources: input.activeSources,
         entities,
-        tasks,
+        tasks: liveTasks,
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
@@ -1314,7 +1320,8 @@ export class MemoryService {
       current_context: currentContext,
       grouped_memory: compactSearchMemory(groupedMemory),
       entities: compactEntities(entities),
-      tasks: compactTasks(tasks),
+      tasks: compactTasks(liveTasks),
+      needs_review_tasks: compactTasks(needsReviewTasks),
       source_events: compactSourceEvents(sourceEvents),
       facts: compactFacts(facts),
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),

@@ -636,6 +636,52 @@ describe("MemoryService assistant session reliability planning", () => {
     expect(calls[0]).toBe("memory-system-mcp");
     expect(calls).toContain("shared");
   });
+
+  it("buckets tasks overdue by more than 14 days out of the default surface", async () => {
+    const stale: ContextTask = {
+      ...makeTask(0),
+      id: "stale-may",
+      title: "Emergency cashflow sprint (May)",
+      priority: "urgent",
+      dueAt: "2026-05-01T09:00:00+12:00",
+    };
+    const future: ContextTask = {
+      ...makeTask(1),
+      id: "live-future",
+      title: "Talley's follow-up",
+      priority: "high",
+      dueAt: "2026-06-13T09:00:00+12:00",
+    };
+    const undated: ContextTask = {
+      ...makeTask(2),
+      id: "live-undated",
+      title: "Write positioning brief",
+      priority: "normal",
+      dueAt: null,
+    };
+    mocks.listTasks.mockResolvedValue([stale, future, undated]);
+
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = (await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "what should I do today",
+      now: "2026-06-10T07:00:00.000Z",
+    })) as {
+      tasks: Array<{ id: string }>;
+      needs_review_tasks: Array<{ id: string }>;
+      operating_brief: { current_tasks_milestones: { overdue_count: number } };
+    };
+
+    const liveIds = result.tasks.map((t) => t.id);
+    const reviewIds = result.needs_review_tasks.map((t) => t.id);
+    expect(liveIds).toContain("live-future");
+    expect(liveIds).toContain("live-undated");
+    expect(liveIds).not.toContain("stale-may");
+    expect(reviewIds).toEqual(["stale-may"]);
+    expect(result.operating_brief.current_tasks_milestones.overdue_count).toBe(0);
+  });
 });
 
 function makeEnv() {

@@ -35,6 +35,7 @@ import {
   type AlignmentAssessment,
 } from "~/domain/memory";
 import { classifyRequest, deriveRetrievalIntent } from "~/domain/request-classification";
+import { partitionTasksByStaleness } from "~/domain/task-lifecycle";
 import {
   buildRequiredContextPack,
   inferTaskProfile,
@@ -986,7 +987,7 @@ export class PlanningService {
       this.initiativeRepo.listInitiatives({ project, status: "active", limit: 10 }),
       this.projectRepo.listRelatedProjects(project),
       this.entityRepo.searchEntities({ project, query: input.userIntent, limit: 12 }),
-      this.entityRepo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 12 }),
+      this.entityRepo.listTasks({ project, dueBefore: daysFromNowIso(14), limit: 50 }),
       this.entityRepo.listSourceEvents({ project, limit: 10 }),
       this.entityRepo.listFacts({ project, limit: 12 }),
       this.projectStatusInternal({ project }),
@@ -1068,6 +1069,10 @@ export class PlanningService {
       strategyContext: strategyContext.strategy_context,
       save: false,
     });
+    const { live: liveTasks, needsReview: needsReviewTasks } = partitionTasksByStaleness(
+      tasks,
+      assistantActionPlan.operational_context.now_utc,
+    );
     const operatingBrief = buildOperatingBrief({
       userIntent: input.userIntent,
       contextResolution: resolution,
@@ -1080,7 +1085,7 @@ export class PlanningService {
       alignmentAssessment,
       groupedMemory,
       contextHealth,
-      tasks,
+      tasks: liveTasks,
       sourceEvents,
       writeBackPolicy,
       availableTools: input.availableTools,
@@ -1109,7 +1114,8 @@ export class PlanningService {
       grouped_memory: groupedMemory,
       current_truth: currentTruth,
       entities,
-      tasks,
+      tasks: liveTasks,
+      needs_review_tasks: needsReviewTasks,
       source_events: sourceEvents,
       facts,
       context_health: contextHealth,
@@ -1120,7 +1126,7 @@ export class PlanningService {
         project,
         activeSources: input.activeSources,
         entities,
-        tasks,
+        tasks: liveTasks,
         sourceEvents,
         warnings,
         currentTruthChecks: currentTruth?.required_live_checks,
@@ -1144,7 +1150,8 @@ export class PlanningService {
       current_context: currentContext,
       grouped_memory: compactSearchMemory(groupedMemory),
       entities: compactEntities(entities),
-      tasks: compactTasks(tasks),
+      tasks: compactTasks(liveTasks),
+      needs_review_tasks: compactTasks(needsReviewTasks),
       source_events: compactSourceEvents(sourceEvents),
       facts: compactFacts(facts),
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
