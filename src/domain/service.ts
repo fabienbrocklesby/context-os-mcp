@@ -1083,15 +1083,25 @@ export class MemoryService {
     };
   }
 
-  private async findSituationDocument(): Promise<ResolvedMemoryDocument | null> {
+  private async findSituationDocument(project: string): Promise<ResolvedMemoryDocument | null> {
     try {
-      const docs = await this.repo.findDocumentsByLayer({
-        project: "shared",
+      const scoped = await this.repo.findDocumentsByLayer({
+        project,
         memoryLayer: "situation",
         canonical: true,
         limit: 1,
       });
-      return docs[0] ?? null;
+      if (scoped[0]) return scoped[0];
+      if (project !== "shared") {
+        const shared = await this.repo.findDocumentsByLayer({
+          project: "shared",
+          memoryLayer: "situation",
+          canonical: true,
+          limit: 1,
+        });
+        return shared[0] ?? null;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -1114,13 +1124,13 @@ export class MemoryService {
     taskProfile?: TaskProfile;
     responseMode?: AssistantSessionResponseMode;
   }) {
-    const situationDoc = await this.findSituationDocument();
     const resolution = await this.resolveContext({
       projectOrTopic: input.projectOrTopic,
       userIntent: input.userIntent,
     });
     const activeProject = resolution.active_project;
     const project = activeProject.slug;
+    const situationDoc = await this.findSituationDocument(project);
     const taskProfile = input.taskProfile ?? inferTaskProfile(input.userIntent);
     const requiredContextPack = buildRequiredContextPack({
       project,
