@@ -82,6 +82,7 @@ import {
   compactStrategyContext,
   compactTasks,
   compactToolPlan,
+  compactWriteBackPolicy,
   enforceCompactSessionBudget,
   retrievalGuidance,
   type AssistantSessionResponseMode,
@@ -1293,6 +1294,7 @@ export class MemoryService {
       environment_tool_guidance: compactEnvironmentToolGuidance(environmentToolGuidance),
       tool_plan: compactToolPlan(assistantActionPlan.tool_plan),
       operating_brief: compactOperatingBrief(operatingBrief),
+      write_back_policy: compactWriteBackPolicy(writeBackPolicy),
       recommended_live_mcp_checks: compactLiveCheckRecommendations(session.recommended_live_mcp_checks),
     });
   }

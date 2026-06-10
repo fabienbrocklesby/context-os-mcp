@@ -262,11 +262,7 @@ describe("MemoryService assistant session reliability planning", () => {
       warnings: ["no_active_vision"],
     });
     expect(result.operating_brief).toMatchObject({
-      time_actionability: {
-        timezone: "Pacific/Auckland",
-        weekday: "Saturday",
-        actionability_label: "requires_live_context",
-      },
+      time_actionability: { detail_location: "operational_context" },
       source_freshness: {
         retrieval_mode: "no_hits",
       },
@@ -473,6 +469,52 @@ describe("MemoryService assistant session reliability planning", () => {
     expect(result.operating_brief.current_tasks_milestones).toMatchObject({
       detail_location: "active_tasks",
     });
+  });
+
+  it("strips connector_policies from write_back_policy in compact mode", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      activeSources: ["zoho_crm", "zoho_mail"],
+    }) as { write_back_policy: Record<string, unknown> };
+
+    expect(result.write_back_policy.mode).toBe("selective_durable_facts");
+    expect(result.write_back_policy).toHaveProperty("rules");
+    expect(result.write_back_policy).not.toHaveProperty("connector_policies");
+  });
+
+  it("replaces operating_brief.time_actionability with a detail_location reference in compact mode", async () => {
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+      userIntent: "review repo",
+      timezone: "Pacific/Auckland",
+      now: "2026-05-01T22:30:00.000Z",
+    }) as PreparedSessionAssertions & { operational_context: Record<string, unknown> };
+
+    expect(result.operating_brief.time_actionability).toEqual({ detail_location: "operational_context" });
+    expect(result.operational_context).toMatchObject({
+      timezone: "Pacific/Auckland",
+      weekday: "Saturday",
+    });
+  });
+
+  it("limits source_events to 5 in compact mode", async () => {
+    mocks.listSourceEvents.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => makeSourceEvent(index)),
+    );
+    const { MemoryService } = await import("~/domain/service");
+    const service = new MemoryService(makeEnv(), makePrincipal());
+
+    const result = await service.prepareAssistantSession({
+      projectOrTopic: "memory-system-mcp",
+    }) as { source_events: unknown[] };
+
+    expect(result.source_events.length).toBeLessThanOrEqual(5);
   });
 
   it("adds the Light Lane sales proposal context pack and quality gates to plan_request", async () => {

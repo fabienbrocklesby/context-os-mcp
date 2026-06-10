@@ -14,7 +14,7 @@ const MAX_MANIFEST_DOCUMENTS = 72;
 const MAX_MEMORY_EXCERPTS = 12;
 const MAX_TASKS = 12;
 const MAX_FACTS = 12;
-const MAX_EVENTS = 10;
+const MAX_EVENTS = 5;
 
 export function compactProject(project: MemoryProject) {
   return {
@@ -172,6 +172,9 @@ export function compactOperatingBrief(
     context_resolution: {
       detail_location: "context_resolution",
     },
+    time_actionability: {
+      detail_location: "operational_context",
+    },
     strategic_alignment: {
       ...strategic,
       visions: compactUnknownStrategic(asArray(strategic.visions)),
@@ -272,6 +275,14 @@ export function compactToolPlan(plan: unknown) {
     connector_policy_defaults: {
       detail_location: "write_back_policy",
     },
+  };
+}
+
+export function compactWriteBackPolicy(policy: unknown) {
+  const item = asRecord(policy);
+  return {
+    mode: item.mode,
+    rules: item.rules,
   };
 }
 
