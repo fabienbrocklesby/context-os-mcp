@@ -1001,6 +1001,8 @@ export class DocumentService {
   }
 
   async setSituationDocument(input: {
+    project?: string;
+    body_markdown?: string;
     financial_position?: string;
     location?: string;
     top_priorities?: string[];
@@ -1008,7 +1010,7 @@ export class DocumentService {
     active_initiatives?: string[];
     notes?: string;
   }) {
-    const project = "shared";
+    const project = normalizeProject(input.project);
     await this.ensureProjectMinimal({ project });
 
     const sections: string[] = ["# Current Situation"];
@@ -1038,7 +1040,9 @@ export class DocumentService {
       sections.push(`## Notes\n${input.notes}`);
     }
 
-    const body = sections.join("\n\n");
+    const body = input.body_markdown?.trim()
+      ? input.body_markdown.trim()
+      : sections.join("\n\n");
     const path = buildLogicalPath(project, ["context", "current"], "situation.md");
     const existing = await this.docRepo.getDocumentByPath(path);
     const now = new Date().toISOString();

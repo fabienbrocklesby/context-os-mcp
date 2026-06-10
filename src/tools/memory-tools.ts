@@ -221,8 +221,10 @@ export function registerMemoryTools(
   server.registerTool(
     "upsert_situation",
     {
-      description: "Create or update the cross-initiative situational awareness document. Include your current financial position, location, top priorities this week, and key constraints. The AI reads this first on every session to enable intelligent cross-initiative advice.",
+      description: "Create or update a situational awareness document. Omit project for the cross-initiative shared situation; pass a project slug to author that project's own situation document (read first on every session for that project). Include current financial position, location, top priorities, and key constraints, or supply body_markdown for a free-form situation.",
       inputSchema: z.object({
+        project: z.string().optional().describe("Project slug to scope this situation document to. Omit for the cross-initiative shared situation."),
+        body_markdown: z.string().optional().describe("Free-form markdown body. When provided, it becomes the situation body verbatim instead of the structured sections."),
         financial_position: z.string().optional().describe("Current financial position, e.g. 'Cash tight, need $X by end of month'"),
         location: z.string().optional().describe("Where you are and where you're going"),
         top_priorities: z.array(z.string()).optional().describe("Your top 3-5 priorities this week across all initiatives"),
